@@ -28,6 +28,8 @@ dependencies {
 	mappings loom.officialMojangMappings()
 	modImplementation "net.fabricmc:fabric-loader:${rootProject.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_version}"
+	implementation project(":protocol")
+	include project(":protocol")
 
 	modImplementation "io.wispforest:owo-lib:${rootProject.owo_version}"
 	include "io.wispforest:owo-sentinel:${rootProject.owo_version}"

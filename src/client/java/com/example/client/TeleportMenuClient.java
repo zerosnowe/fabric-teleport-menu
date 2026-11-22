@@ -169,6 +169,7 @@ public class TeleportMenuClient implements ClientModInitializer {
 			clearMomentCache();
 			clearBoxHud();
 			ClientPlayNetworking.send(new TeleportMenuPayloads.ClientHelloPayload(UI_PROTOCOL_VERSION));
+			sendEconomySidebarVisibility(ClientPreferences.hideMoneySidebar());
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			clearMomentCache();
@@ -301,6 +302,7 @@ public class TeleportMenuClient implements ClientModInitializer {
 		registerC2S(TeleportMenuPayloads.RenameHomeRequestPayload.TYPE, TeleportMenuPayloads.RenameHomeRequestPayload.STREAM_CODEC);
 		registerC2S(TeleportMenuPayloads.DisableItemRequestPayload.TYPE, TeleportMenuPayloads.DisableItemRequestPayload.STREAM_CODEC);
 		registerC2S(TeleportMenuPayloads.EconomyAdminActionPayload.TYPE, TeleportMenuPayloads.EconomyAdminActionPayload.STREAM_CODEC);
+		registerC2S(TeleportMenuPayloads.EconomySidebarVisibilityPayload.TYPE, TeleportMenuPayloads.EconomySidebarVisibilityPayload.STREAM_CODEC);
 		registerC2S(TeleportMenuPayloads.CreateShopRequestPayload.TYPE, TeleportMenuPayloads.CreateShopRequestPayload.STREAM_CODEC);
 		registerC2S(TeleportMenuPayloads.ExpandShopLimitRequestPayload.TYPE, TeleportMenuPayloads.ExpandShopLimitRequestPayload.STREAM_CODEC);
 		registerC2S(TeleportMenuPayloads.DeleteShopRequestPayload.TYPE, TeleportMenuPayloads.DeleteShopRequestPayload.STREAM_CODEC);
@@ -402,10 +404,19 @@ public class TeleportMenuClient implements ClientModInitializer {
 
 	public static void setMoneySidebarHidden(boolean hidden) {
 		ClientPreferences.setHideMoneySidebar(hidden);
+		sendEconomySidebarVisibility(hidden);
 		if (hidden) {
 			hideEconomySidebarDisplay(Minecraft.getInstance());
 		} else {
 			showEconomySidebarDisplay(Minecraft.getInstance());
+		}
+	}
+
+	private static void sendEconomySidebarVisibility(boolean hidden) {
+		TeleportMenuPayloads.EconomySidebarVisibilityPayload payload =
+			new TeleportMenuPayloads.EconomySidebarVisibilityPayload(hidden);
+		if (ClientPlayNetworking.canSend(payload.type())) {
+			ClientPlayNetworking.send(payload);
 		}
 	}
 

@@ -135,6 +135,10 @@ public class TeleportMenuMod implements ModInitializer {
 	private static final Map<UUID, Set<String>> PLAYER_REWARDED_EQUIPMENT = new ConcurrentHashMap<>();
 	private static final Map<UUID, Integer> PLAYER_UI_PROTOCOLS = new ConcurrentHashMap<>();
 	private static final Set<String> DISABLED_ITEM_IDS = ConcurrentHashMap.newKeySet();
+	private static final Set<UUID> ECONOMY_SIDEBAR_HIDDEN = ConcurrentHashMap.newKeySet();
+	private static final Map<UUID, Integer> ECONOMY_SIDEBAR_LAST_SCORE = new ConcurrentHashMap<>();
+	private static final Set<UUID> ECONOMY_SIDEBAR_ASSERTED = ConcurrentHashMap.newKeySet();
+	private static final Set<UUID> ECONOMY_SIDEBAR_HIDDEN_SENT = ConcurrentHashMap.newKeySet();
 	private static final int STABLE_UI_PROTOCOL = 1;
 	private static final int UNKNOWN_UI_PROTOCOL = 0;
 	private static final boolean ECONOMY_MOD_LOADED = FabricLoader.getInstance().isModLoaded("economy");
@@ -213,6 +217,7 @@ public class TeleportMenuMod implements ModInitializer {
 		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.RenameHomeRequestPayload.TYPE, TeleportMenuPayloads.RenameHomeRequestPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.DisableItemRequestPayload.TYPE, TeleportMenuPayloads.DisableItemRequestPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.EconomyAdminActionPayload.TYPE, TeleportMenuPayloads.EconomyAdminActionPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.EconomySidebarVisibilityPayload.TYPE, TeleportMenuPayloads.EconomySidebarVisibilityPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.CreateShopRequestPayload.TYPE, TeleportMenuPayloads.CreateShopRequestPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.ExpandShopLimitRequestPayload.TYPE, TeleportMenuPayloads.ExpandShopLimitRequestPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(TeleportMenuPayloads.DeleteShopRequestPayload.TYPE, TeleportMenuPayloads.DeleteShopRequestPayload.STREAM_CODEC);
@@ -262,6 +267,8 @@ public class TeleportMenuMod implements ModInitializer {
 		ServerPlayNetworking.registerGlobalReceiver(TeleportMenuPayloads.DisableItemRequestPayload.TYPE, (payload, context) -> handleDisableItemRequest(context.player(), payload.itemId(), payload.disable()));
 		ServerPlayNetworking.registerGlobalReceiver(TeleportMenuPayloads.EconomyAdminActionPayload.TYPE, (payload, context) ->
 			handleEconomyAdminAction(context.player(), payload.targetId(), payload.action(), payload.amount()));
+		ServerPlayNetworking.registerGlobalReceiver(TeleportMenuPayloads.EconomySidebarVisibilityPayload.TYPE, (payload, context) ->
+			setEconomySidebarVisible(context.player().server, context.player().getUUID(), !payload.hidden()));
 		ServerPlayNetworking.registerGlobalReceiver(TeleportMenuPayloads.CreateShopRequestPayload.TYPE, (payload, context) -> handleCreateShop(context.player(), payload.name()));
 		ServerPlayNetworking.registerGlobalReceiver(TeleportMenuPayloads.ExpandShopLimitRequestPayload.TYPE, (payload, context) -> handleExpandShopLimit(context.player()));
 		ServerPlayNetworking.registerGlobalReceiver(TeleportMenuPayloads.DeleteShopRequestPayload.TYPE, (payload, context) -> handleDeleteShop(context.player(), payload.shopId()));
@@ -294,13 +301,21 @@ public class TeleportMenuMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTED.register(TeleportMenuMod::onServerStarted);
 		ServerLifecycleEvents.SERVER_STOPPING.register(TeleportMenuMod::onServerStopping);
 		ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> cleanupLegacyBoxShopDisplaysInChunk(world, chunk));
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> syncLocalizations(handler.player));
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			syncLocalizations(handler.player);
+			runEconomySidebarOnServerThread(server, () ->
+				applyEconomySidebarState(server, handler.player.getUUID()));
+		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			UUID playerId = handler.player.getUUID();
 			PLAYER_UI_PROTOCOLS.remove(playerId);
 			PLAYER_EQUIPMENT_COUNTS.remove(playerId);
 			PLAYER_REWARDED_EQUIPMENT.remove(playerId);
-			cleanupEconomySidebarObjective(server, playerId);
+			runEconomySidebarOnServerThread(server, () -> {
+				ECONOMY_SIDEBAR_LAST_SCORE.remove(playerId);
+				ECONOMY_SIDEBAR_ASSERTED.remove(playerId);
+				ECONOMY_SIDEBAR_HIDDEN_SENT.remove(playerId);
+			});
 		});
 		ServerTickEvents.END_SERVER_TICK.register(TeleportMenuMod::onServerTick);
 		LOGGER.info("Teleport Menu 2.3 initialized");
@@ -316,9 +331,6 @@ public class TeleportMenuMod implements ModInitializer {
 	}
 
 	private static void onServerStopping(MinecraftServer server) {
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			cleanupEconomySidebarObjective(server, player.getUUID());
-		}
 		savePersistentData(server);
 		ACTIVE_SERVER = null;
 		TERRITORY_SELECTIONS.clear();
@@ -326,6 +338,9 @@ public class TeleportMenuMod implements ModInitializer {
 		LAST_DENY_ACTIONBAR_TICK.clear();
 		PLAYER_EQUIPMENT_COUNTS.clear();
 		PLAYER_REWARDED_EQUIPMENT.clear();
+		ECONOMY_SIDEBAR_LAST_SCORE.clear();
+		ECONOMY_SIDEBAR_ASSERTED.clear();
+		ECONOMY_SIDEBAR_HIDDEN_SENT.clear();
 		PLAYER_SHOPS.clear();
 		BOX_SHOPS.clear();
 		BOX_SHOP_SHOP_IDS.clear();
@@ -363,6 +378,7 @@ public class TeleportMenuMod implements ModInitializer {
 		PLAYER_REWARDED_EQUIPMENT.clear();
 		MOMENTS.clear();
 		MOMENT_DRAFTS.clear();
+		ECONOMY_SIDEBAR_HIDDEN.clear();
 
 		Path file = dataFile(server);
 		if (!Files.exists(file)) {
@@ -387,6 +403,7 @@ public class TeleportMenuMod implements ModInitializer {
 			readRewardedEquipment(root);
 			readMoments(root);
 			readMomentDrafts(root);
+			readEconomySidebarHidden(root);
 			LOGGER.info("Loaded teleport menu data from {}", file);
 		} catch (Exception error) {
 			LOGGER.error("Failed to load teleport menu data from {}", file, error);
@@ -400,7 +417,7 @@ public class TeleportMenuMod implements ModInitializer {
 			Path file = dataFile(server);
 
 			JsonObject root = new JsonObject();
-			root.addProperty("schema", 1);
+			root.addProperty("schema", 2);
 			root.add("disabledItems", writeDisabledItems());
 			root.add("homes", writeHomes());
 			root.add("territories", writeTerritories());
@@ -410,6 +427,7 @@ public class TeleportMenuMod implements ModInitializer {
 			root.add("rewardedEquipment", writeRewardedEquipment());
 			root.add("moments", writeMoments());
 			root.add("momentDrafts", writeMomentDrafts());
+			root.add("economySidebarHiddenPlayerIds", writeEconomySidebarHidden());
 
 			Files.writeString(file, GSON.toJson(root), StandardCharsets.UTF_8);
 		} catch (IOException error) {
@@ -420,6 +438,14 @@ public class TeleportMenuMod implements ModInitializer {
 	private static JsonArray writeDisabledItems() {
 		JsonArray array = new JsonArray();
 		getDisabledItemIdList().forEach(array::add);
+		return array;
+	}
+
+	private static JsonArray writeEconomySidebarHidden() {
+		JsonArray array = new JsonArray();
+		ECONOMY_SIDEBAR_HIDDEN.stream()
+			.sorted(Comparator.comparing(UUID::toString))
+			.forEach(playerId -> array.add(playerId.toString()));
 		return array;
 	}
 
@@ -832,6 +858,23 @@ public class TeleportMenuMod implements ModInitializer {
 				}
 			} catch (Exception ignored) {
 				// skip invalid draft
+			}
+		}
+	}
+
+	private static void readEconomySidebarHidden(JsonObject root) {
+		if (!root.has("economySidebarHiddenPlayerIds") || !root.get("economySidebarHiddenPlayerIds").isJsonArray()) {
+			return;
+		}
+
+		for (JsonElement element : root.getAsJsonArray("economySidebarHiddenPlayerIds")) {
+			if (!element.isJsonPrimitive()) {
+				continue;
+			}
+			try {
+				ECONOMY_SIDEBAR_HIDDEN.add(UUID.fromString(element.getAsString()));
+			} catch (Exception ignored) {
+				// Skip invalid player IDs.
 			}
 		}
 	}
@@ -2138,60 +2181,121 @@ public class TeleportMenuMod implements ModInitializer {
 			return;
 		}
 
-		Scoreboard scoreboard = server.getScoreboard();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			try {
-				String objectiveName = economySidebarObjectiveName(player.getUUID());
-				Objective objective = scoreboard.getObjective(objectiveName);
-				boolean created = false;
-				if (objective == null) {
-					objective = scoreboard.addObjective(
-						objectiveName,
-						ObjectiveCriteria.DUMMY,
-						Component.literal("\u25C6 \u91D1\u5E01\u4F59\u989D"),
-						ObjectiveCriteria.RenderType.INTEGER,
-						false,
-						null
-					);
-					created = true;
-				}
-
-				double money = economyGetMoney(player.getName().getString());
-				int score = (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, Math.round(money)));
-				scoreboard.getOrCreatePlayerScore(ScoreHolder.forNameOnly(ECONOMY_SIDEBAR_ENTRY), objective).set(score);
-
-				player.connection.send(new ClientboundSetObjectivePacket(
-					objective,
-					created ? ClientboundSetObjectivePacket.METHOD_ADD : ClientboundSetObjectivePacket.METHOD_CHANGE
-				));
-				player.connection.send(new ClientboundSetDisplayObjectivePacket(DisplaySlot.SIDEBAR, objective));
-				player.connection.send(new ClientboundSetScorePacket(
-					ECONOMY_SIDEBAR_ENTRY,
-					objective.getName(),
-					score,
-					Optional.empty(),
-					Optional.empty()
-				));
-			} catch (Exception error) {
-				LOGGER.debug("Failed to refresh economy sidebar for {}", player.getName().getString(), error);
-			}
+			applyEconomySidebarState(server, player.getUUID());
 		}
+	}
+
+	public static void setEconomySidebarVisible(MinecraftServer server, UUID playerId, boolean visible) {
+		if (server == null || playerId == null) {
+			return;
+		}
+
+		runEconomySidebarOnServerThread(server, () -> {
+			if (visible) {
+				ECONOMY_SIDEBAR_HIDDEN.remove(playerId);
+			} else {
+				ECONOMY_SIDEBAR_HIDDEN.add(playerId);
+				ECONOMY_SIDEBAR_LAST_SCORE.remove(playerId);
+				ECONOMY_SIDEBAR_ASSERTED.remove(playerId);
+				ECONOMY_SIDEBAR_HIDDEN_SENT.remove(playerId);
+			}
+			persistDataIfPossible();
+			applyEconomySidebarState(server, playerId);
+		});
+	}
+
+	private static void runEconomySidebarOnServerThread(MinecraftServer server, Runnable operation) {
+		if (server == null || operation == null) {
+			return;
+		}
+		if (server.isSameThread()) {
+			operation.run();
+		} else {
+			server.execute(operation);
+		}
+	}
+
+	private static void applyEconomySidebarState(MinecraftServer server, UUID playerId) {
+		if (server == null || playerId == null) {
+			return;
+		}
+		if (!server.isSameThread()) {
+			runEconomySidebarOnServerThread(server, () -> applyEconomySidebarState(server, playerId));
+			return;
+	}
+
+	ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+	if (player == null || player.isRemoved()) {
+		return;
+	}
+
+	if (ECONOMY_SIDEBAR_HIDDEN.contains(playerId)) {
+		if (ECONOMY_SIDEBAR_HIDDEN_SENT.add(playerId)) {
+			player.connection.send(new ClientboundSetDisplayObjectivePacket(DisplaySlot.SIDEBAR, null));
+		}
+		return;
+	}
+
+	ECONOMY_SIDEBAR_HIDDEN_SENT.remove(playerId);
+	try {
+		Scoreboard scoreboard = server.getScoreboard();
+		String objectiveName = economySidebarObjectiveName(playerId);
+		Objective objective = scoreboard.getObjective(objectiveName);
+		boolean created = objective == null;
+		if (created) {
+			objective = scoreboard.addObjective(
+				objectiveName,
+				ObjectiveCriteria.DUMMY,
+				Component.literal("\u25C6 \u91D1\u5E01\u4F59\u989D"),
+				ObjectiveCriteria.RenderType.INTEGER,
+				false,
+				null
+			);
+		}
+
+		double money = economyGetMoney(player.getName().getString());
+		int score = (int) Math.max(
+			Integer.MIN_VALUE,
+			Math.min(Integer.MAX_VALUE, Math.round(money))
+		);
+		Integer previous = ECONOMY_SIDEBAR_LAST_SCORE.put(playerId, score);
+
+		if (created) {
+			player.connection.send(new ClientboundSetObjectivePacket(
+				objective,
+				ClientboundSetObjectivePacket.METHOD_ADD
+			));
+		}
+
+		if (created || previous == null || previous != score) {
+			scoreboard.getOrCreatePlayerScore(
+				ScoreHolder.forNameOnly(ECONOMY_SIDEBAR_ENTRY),
+				objective
+			).set(score);
+			player.connection.send(new ClientboundSetScorePacket(
+				ECONOMY_SIDEBAR_ENTRY,
+				objective.getName(),
+				score,
+				Optional.empty(),
+				Optional.empty()
+			));
+		}
+
+		if (ECONOMY_SIDEBAR_ASSERTED.add(playerId)) {
+			player.connection.send(new ClientboundSetDisplayObjectivePacket(
+				DisplaySlot.SIDEBAR,
+				objective
+			));
+		}
+	} catch (Exception error) {
+		LOGGER.debug("Failed to apply economy sidebar for {}", player.getName().getString(), error);
+	}
 	}
 
 	private static String economySidebarObjectiveName(UUID playerId) {
 		String compact = playerId.toString().replace("-", "");
 		return "te2_" + compact.substring(0, 12);
-	}
-
-	private static void cleanupEconomySidebarObjective(MinecraftServer server, UUID playerId) {
-		if (server == null || playerId == null) {
-			return;
-		}
-		Scoreboard scoreboard = server.getScoreboard();
-		Objective objective = scoreboard.getObjective(economySidebarObjectiveName(playerId));
-		if (objective != null) {
-			scoreboard.removeObjective(objective);
-		}
 	}
 
 	private static void showTerritorySelectionParticles(ServerPlayer player) {

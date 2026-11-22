@@ -519,6 +519,25 @@ public final class TeleportMenuPayloads {
 		}
 	}
 
+	public record EconomySidebarVisibilityPayload(boolean hidden) implements CustomPacketPayload {
+		public static final Type<EconomySidebarVisibilityPayload> TYPE = new Type<>(id("economy_sidebar_visibility"));
+		public static final StreamCodec<RegistryFriendlyByteBuf, EconomySidebarVisibilityPayload> STREAM_CODEC =
+			CustomPacketPayload.codec(EconomySidebarVisibilityPayload::write, EconomySidebarVisibilityPayload::new);
+
+		private EconomySidebarVisibilityPayload(RegistryFriendlyByteBuf buf) {
+			this(buf.readBoolean());
+		}
+
+		private void write(RegistryFriendlyByteBuf buf) {
+			buf.writeBoolean(this.hidden);
+		}
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
+	}
+
 	public record EconomyLeaderboardEntry(UUID playerId, String name, double balance, String formattedBalance) {
 		public EconomyLeaderboardEntry {
 			name = name == null ? "" : name;

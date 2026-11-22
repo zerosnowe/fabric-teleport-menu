@@ -32,9 +32,15 @@ bin/
 
 run/
 
+# local test environment
+.test-env/
+
 # java
 
 hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# build artifacts
+build
