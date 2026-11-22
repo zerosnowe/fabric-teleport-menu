@@ -5,31 +5,21 @@ import com.example.client.i18n.ClientI18n;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
 import io.wispforest.owo.ui.component.Components;
-import io.wispforest.owo.ui.container.Containers;
+import io.wispforest.owo.ui.component.TextBoxComponent;
 import io.wispforest.owo.ui.container.FlowLayout;
 import io.wispforest.owo.ui.core.Sizing;
-import io.wispforest.owo.ui.core.Surface;
-import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.network.chat.Component;
 
 /**
  * Full-page composer for a moment. "保存" publishes and throws the text away,
  * "存为草稿" persists the current text through the server JSON store.
- * <p>
- * The text box is a vanilla {@link MultiLineEditBox} registered directly on the
- * screen instead of an owo component: that way {@code Screen#getFocused()} is the
- * edit box itself and character input - including IME composition - travels the
- * exact same path as the vanilla chat bar / book editor.
  */
 public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 	public static final int MAX_LENGTH = 256;
 
-	private static final int INPUT_HEIGHT = 112;
-
 	private final TeleportMomentScreen parent;
 
-	private FlowLayout inputSlot;
-	private MultiLineEditBox input;
+	private TextBoxComponent input;
 	private String inputText;
 
 	public TeleportMomentComposeScreen(TeleportMomentScreen parent) {
@@ -43,12 +33,6 @@ public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 	}
 
 	@Override
-	protected void init() {
-		super.init();
-		this.mountInputBox();
-	}
-
-	@Override
 	protected void build(FlowLayout rootComponent) {
 		this.configureRoot(rootComponent);
 		rootComponent.gap(6);
@@ -56,10 +40,13 @@ public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.moments.compose.title")).shadow(true));
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.moments.compose.hint", MAX_LENGTH)));
 
-		FlowLayout slot = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(INPUT_HEIGHT));
-		slot.surface(Surface.flat(0x20000000));
-		this.inputSlot = slot;
-		rootComponent.child(slot);
+		TextBoxComponent textBox = Components.textBox(Sizing.fixed(MAIN_BUTTON_WIDTH));
+		textBox.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(BUTTON_HEIGHT));
+		textBox.setMaxLength(MAX_LENGTH);
+		textBox.text(this.inputText);
+		textBox.onChanged().subscribe(value -> this.inputText = value == null ? "" : value);
+		this.input = textBox;
+		rootComponent.child(textBox);
 
 		rootComponent.child(this.menuButton(ClientI18n.tr("screen.teleportmenu.moments.compose.save"), TeleportIcons.CONFIRM, this::publish));
 		rootComponent.child(this.menuButton(ClientI18n.tr("screen.teleportmenu.moments.compose.draft"), TeleportIcons.SET, this::saveDraft));
@@ -68,35 +55,6 @@ public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 				this.minecraft.setScreen(this.parent);
 			}
 		}));
-	}
-
-	private void mountInputBox() {
-		if (this.inputSlot == null) {
-			return;
-		}
-
-		int width = this.inputSlot.width();
-		int height = this.inputSlot.height();
-		if (width <= 0 || height <= 0) {
-			return;
-		}
-
-		MultiLineEditBox box = new MultiLineEditBox(
-			this.font,
-			this.inputSlot.x(),
-			this.inputSlot.y(),
-			width,
-			height,
-			ClientI18n.tr("screen.teleportmenu.moments.compose.placeholder"),
-			ClientI18n.tr("screen.teleportmenu.moments.compose.title")
-		);
-		box.setCharacterLimit(MAX_LENGTH);
-		box.setValue(this.currentText());
-		box.setValueListener(value -> this.inputText = value == null ? "" : value);
-
-		this.input = box;
-		this.addRenderableWidget(box);
-		this.setFocused(box);
 	}
 
 	private void publish() {
