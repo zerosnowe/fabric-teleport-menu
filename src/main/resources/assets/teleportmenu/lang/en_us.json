@@ -204,7 +204,7 @@
   "screen.teleportmenu.moments.own_suffix": " (me)",
   "screen.teleportmenu.moments.publish": "Post Moment",
   "screen.teleportmenu.moments.compose.title": "New Moment",
-  "screen.teleportmenu.moments.compose.hint": "Up to %s characters",
+  "screen.teleportmenu.moments.compose.hint": "Multi-line input, up to %s characters",
   "screen.teleportmenu.moments.compose.save": "Save",
   "screen.teleportmenu.moments.compose.draft": "Save Draft",
   "screen.teleportmenu.moments.time.just_now": "just now",

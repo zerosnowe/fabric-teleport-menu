@@ -5,7 +5,7 @@ import com.example.client.i18n.ClientI18n;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
 import io.wispforest.owo.ui.component.Components;
-import io.wispforest.owo.ui.component.TextBoxComponent;
+import io.wispforest.owo.ui.component.TextAreaComponent;
 import io.wispforest.owo.ui.container.FlowLayout;
 import io.wispforest.owo.ui.core.Sizing;
 import net.minecraft.network.chat.Component;
@@ -17,9 +17,11 @@ import net.minecraft.network.chat.Component;
 public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 	public static final int MAX_LENGTH = 256;
 
+	private static final int INPUT_HEIGHT = 112;
+
 	private final TeleportMomentScreen parent;
 
-	private TextBoxComponent input;
+	private TextAreaComponent input;
 	private String inputText;
 
 	public TeleportMomentComposeScreen(TeleportMomentScreen parent) {
@@ -40,13 +42,12 @@ public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.moments.compose.title")).shadow(true));
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.moments.compose.hint", MAX_LENGTH)));
 
-		TextBoxComponent textBox = Components.textBox(Sizing.fixed(MAIN_BUTTON_WIDTH));
-		textBox.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(BUTTON_HEIGHT));
-		textBox.setMaxLength(MAX_LENGTH);
-		textBox.text(this.inputText);
-		textBox.onChanged().subscribe(value -> this.inputText = value == null ? "" : value);
-		this.input = textBox;
-		rootComponent.child(textBox);
+		TextAreaComponent textArea = Components.textArea(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(INPUT_HEIGHT));
+		textArea.setCharacterLimit(MAX_LENGTH);
+		textArea.text(this.inputText);
+		textArea.onChanged().subscribe(value -> this.inputText = value == null ? "" : value);
+		this.input = textArea;
+		rootComponent.child(textArea);
 
 		rootComponent.child(this.menuButton(ClientI18n.tr("screen.teleportmenu.moments.compose.save"), TeleportIcons.CONFIRM, this::publish));
 		rootComponent.child(this.menuButton(ClientI18n.tr("screen.teleportmenu.moments.compose.draft"), TeleportIcons.SET, this::saveDraft));
