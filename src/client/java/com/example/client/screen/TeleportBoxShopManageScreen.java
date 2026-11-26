@@ -1,19 +1,27 @@
 package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
+
+import com.example.client.mvvm.BoxShopViewModel;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
 import io.wispforest.owo.ui.component.Components;
 import io.wispforest.owo.ui.container.FlowLayout;
 
 public class TeleportBoxShopManageScreen extends BaseTeleportScreen {
-	private final TeleportMenuPayloads.BoxShopTarget boxShop;
 	private final TeleportBoxShopScreen parent;
+	private final BoxShopViewModel viewModel;
 
 	public TeleportBoxShopManageScreen(TeleportMenuPayloads.BoxShopTarget boxShop, TeleportBoxShopScreen parent) {
 		super(ClientI18n.tr("screen.teleportmenu.boxshop.manage"));
-		this.boxShop = boxShop;
 		this.parent = parent;
+		this.viewModel = new BoxShopViewModel(boxShop);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
@@ -24,13 +32,13 @@ public class TeleportBoxShopManageScreen extends BaseTeleportScreen {
 
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.boxshop.name"), TeleportIcons.RENAME, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportBoxShopNameScreen(this.boxShop, this.parent));
+				this.minecraft.setScreen(new TeleportBoxShopNameScreen(this.viewModel.boxShop(), this.parent));
 			}
 		}));
 
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.shop.goods.add"), TeleportIcons.ADD, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportBoxShopAddGoodScreen(this, this.boxShop));
+				this.minecraft.setScreen(new TeleportBoxShopAddGoodScreen(this, this.viewModel.boxShop()));
 			}
 		}));
 

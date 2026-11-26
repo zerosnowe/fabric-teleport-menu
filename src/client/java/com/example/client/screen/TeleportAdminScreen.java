@@ -1,6 +1,7 @@
 package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
+import com.example.client.mvvm.AdminViewModel;
 import com.example.client.widget.TeleportIcons;
 
 import io.wispforest.owo.ui.component.Components;
@@ -11,12 +12,18 @@ import java.util.Set;
 
 public class TeleportAdminScreen extends BaseTeleportScreen {
 	private final TeleportMainScreen mainScreen;
-	private final Set<String> disabledItemIds;
+	private final AdminViewModel viewModel;
 
 	public TeleportAdminScreen(TeleportMainScreen mainScreen, Set<String> disabledItemIds) {
 		super(ClientI18n.tr("screen.teleportmenu.admin.title"));
 		this.mainScreen = mainScreen;
-		this.disabledItemIds = Set.copyOf(disabledItemIds);
+		this.viewModel = new AdminViewModel(mainScreen.targets(), disabledItemIds);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	public TeleportMainScreen mainScreen() {
@@ -30,12 +37,12 @@ public class TeleportAdminScreen extends BaseTeleportScreen {
 
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.admin.item_manage"), TeleportIcons.INVENTORY, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportItemManageScreen(this, this.disabledItemIds, ""));
+				this.minecraft.setScreen(new TeleportItemManageScreen(this, this.viewModel.disabledItemIds(), ""));
 			}
 		}));
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.admin.economy"), TeleportIcons.COIN, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportEconomyManageScreen(this, this.mainScreen.targets()));
+				this.minecraft.setScreen(new TeleportEconomyManageScreen(this, this.viewModel.targets()));
 			}
 		}));
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.players.back"), TeleportIcons.BACK, () -> {

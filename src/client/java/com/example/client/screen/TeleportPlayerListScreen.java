@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.PlayerListViewModel;
 import com.example.client.widget.OrePlayerEntryButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -12,21 +13,25 @@ import io.wispforest.owo.ui.container.ScrollContainer;
 import io.wispforest.owo.ui.core.Color;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.minecraft.network.chat.Component;
 
 import java.util.List;
 
 public class TeleportPlayerListScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 176;
 
-	private final List<TeleportMenuPayloads.PlayerTarget> targets;
 	private final TeleportMainScreen parent;
+	private final PlayerListViewModel viewModel;
 
 	public TeleportPlayerListScreen(List<TeleportMenuPayloads.PlayerTarget> targets, TeleportMainScreen parent) {
 		super(ClientI18n.tr("screen.teleportmenu.players.title"));
-		this.targets = List.copyOf(targets);
 		this.parent = parent;
+		this.viewModel = new PlayerListViewModel(targets);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
@@ -39,19 +44,20 @@ public class TeleportPlayerListScreen extends BaseTeleportScreen {
 		FlowLayout listLayout = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 		listLayout.gap(3);
 
-		if (this.targets.isEmpty()) {
+		List<TeleportMenuPayloads.PlayerTarget> targets = this.viewModel.targets();
+		if (targets.isEmpty()) {
 			listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.players.empty")));
 		} else {
-			for (TeleportMenuPayloads.PlayerTarget target : this.targets) {
+			for (TeleportMenuPayloads.PlayerTarget target : targets) {
 				OrePlayerEntryButtonWidget widget = new OrePlayerEntryButtonWidget(
 					MAIN_BUTTON_WIDTH,
 					PLAYER_ENTRY_HEIGHT,
 					target.uuid(),
 					target.name(),
 					playerId -> {
-					ClientPlayNetworking.send(new TeleportMenuPayloads.TeleportRequestPayload(playerId));
-					this.onClose();
-				});
+						this.viewModel.teleport(playerId).execute();
+						this.onClose();
+					});
 
 				var entryComponent = Components.wrapVanillaWidget(widget);
 				entryComponent.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(PLAYER_ENTRY_HEIGHT));

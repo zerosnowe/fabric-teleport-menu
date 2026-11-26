@@ -2,7 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
-import com.example.client.TeleportMenuClient;
+import com.example.client.mvvm.ShopManageViewModel;
 import com.example.client.widget.OreIconListEntryButtonWidget;
 import com.example.client.widget.OreSmallActionButtonWidget;
 import com.example.client.widget.TeleportIcons;
@@ -22,13 +22,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 import java.util.List;
-import java.util.UUID;
 
 public class TeleportShopManageScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 150;
 	private static final int MORE_BUTTON_WIDTH = 30;
 
 	private final TeleportEconomyScreen parent;
+	private final ShopManageViewModel viewModel = new ShopManageViewModel();
 
 	public TeleportShopManageScreen(TeleportEconomyScreen parent) {
 		super(ClientI18n.tr("screen.teleportmenu.shop.manage.title"));
@@ -36,15 +36,21 @@ public class TeleportShopManageScreen extends BaseTeleportScreen {
 	}
 
 	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
+	}
+
+	@Override
 	protected void build(FlowLayout rootComponent) {
 		this.configureRoot(rootComponent);
 		rootComponent.gap(6);
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.manage.title")).shadow(true));
-		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.manage.limit", TeleportMenuClient.ownShopCount(), TeleportMenuClient.ownShopLimit())));
+		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.manage.limit", this.viewModel.ownShopCount(), this.viewModel.ownShopLimit())));
 
 		FlowLayout listLayout = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 		listLayout.gap(3);
-		List<TeleportMenuPayloads.ShopTarget> myShops = ownShops();
+		List<TeleportMenuPayloads.ShopTarget> myShops = this.viewModel.ownShops();
 		if (myShops.isEmpty()) {
 			listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.manage.empty")));
 		} else {
@@ -98,7 +104,7 @@ public class TeleportShopManageScreen extends BaseTeleportScreen {
 			}
 		}));
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.shop.manage.expand"), TeleportIcons.EXPAND, () -> {
-			net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(new TeleportMenuPayloads.ExpandShopLimitRequestPayload());
+			this.viewModel.expandLimit().execute();
 			if (this.minecraft != null) {
 				this.minecraft.setScreen(this);
 			}
@@ -109,14 +115,6 @@ public class TeleportShopManageScreen extends BaseTeleportScreen {
 				this.minecraft.setScreen(this.parent);
 			}
 		}));
-	}
-
-	private List<TeleportMenuPayloads.ShopTarget> ownShops() {
-		if (this.minecraft == null || this.minecraft.player == null) {
-			return List.of();
-		}
-		UUID self = this.minecraft.player.getUUID();
-		return TeleportMenuClient.shopTargets().stream().filter(shop -> shop.ownerId().equals(self)).toList();
 	}
 
 	private static Item resolveItem(String rawId) {

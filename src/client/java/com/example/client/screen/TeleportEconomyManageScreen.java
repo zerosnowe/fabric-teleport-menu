@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.EconomyManageViewModel;
 import com.example.client.widget.OrePlayerEntryButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -12,7 +13,6 @@ import io.wispforest.owo.ui.container.ScrollContainer;
 import io.wispforest.owo.ui.core.Color;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
-import net.minecraft.network.chat.Component;
 
 import java.util.List;
 
@@ -20,12 +20,18 @@ public class TeleportEconomyManageScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 176;
 
 	private final TeleportAdminScreen parent;
-	private final List<TeleportMenuPayloads.PlayerTarget> players;
+	private final EconomyManageViewModel viewModel;
 
 	public TeleportEconomyManageScreen(TeleportAdminScreen parent, List<TeleportMenuPayloads.PlayerTarget> players) {
 		super(ClientI18n.tr("screen.teleportmenu.admin.economy.title"));
 		this.parent = parent;
-		this.players = List.copyOf(players);
+		this.viewModel = new EconomyManageViewModel(players);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
@@ -38,10 +44,11 @@ public class TeleportEconomyManageScreen extends BaseTeleportScreen {
 		FlowLayout listLayout = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 		listLayout.gap(3);
 
-		if (this.players.isEmpty()) {
+		List<TeleportMenuPayloads.PlayerTarget> players = this.viewModel.players();
+		if (players.isEmpty()) {
 			listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.admin.economy.empty")));
 		} else {
-			for (TeleportMenuPayloads.PlayerTarget target : this.players) {
+			for (TeleportMenuPayloads.PlayerTarget target : players) {
 				OrePlayerEntryButtonWidget widget = new OrePlayerEntryButtonWidget(
 					MAIN_BUTTON_WIDTH,
 					PLAYER_ENTRY_HEIGHT,

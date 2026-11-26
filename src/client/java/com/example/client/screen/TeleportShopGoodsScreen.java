@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.ShopGoodsViewModel;
 import com.example.client.widget.OreIconListEntryButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -14,7 +15,6 @@ import io.wispforest.owo.ui.core.Color;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -27,28 +27,33 @@ public class TeleportShopGoodsScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 174;
 
 	private final TeleportShopListScreen parent;
-	private final TeleportMenuPayloads.ShopTarget shop;
-	private String searchQuery = "";
+	private final ShopGoodsViewModel viewModel;
 	private FlowLayout listLayout;
 
 	public TeleportShopGoodsScreen(TeleportShopListScreen parent, TeleportMenuPayloads.ShopTarget shop) {
 		super(ClientI18n.tr("screen.teleportmenu.shop.goods.title", shop.name()));
 		this.parent = parent;
-		this.shop = shop;
+		this.viewModel = new ShopGoodsViewModel(shop);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
 	protected void build(FlowLayout rootComponent) {
 		this.configureRoot(rootComponent);
 		rootComponent.gap(6);
-		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.title", this.shop.name())).shadow(true));
+		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.title", this.viewModel.shop().name())).shadow(true));
 
 		TextBoxComponent search = Components.textBox(Sizing.fixed(MAIN_BUTTON_WIDTH));
 		search.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(BUTTON_HEIGHT));
 		search.setMaxLength(80);
-		search.text(this.searchQuery);
+		search.text(this.viewModel.searchQuery().get());
 		search.onChanged().subscribe(value -> {
-			this.searchQuery = value == null ? "" : value;
+			this.viewModel.searchQuery().set(value == null ? "" : value);
 			this.refreshList();
 		});
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.search")));
@@ -77,7 +82,7 @@ public class TeleportShopGoodsScreen extends BaseTeleportScreen {
 		}
 		this.listLayout.clearChildren();
 
-		List<TeleportMenuPayloads.ShopGoodTarget> goods = filteredGoods();
+		List<TeleportMenuPayloads.ShopGoodTarget> goods = this.viewModel.filteredGoods();
 		if (goods.isEmpty()) {
 			this.listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.empty")));
 			return;
@@ -96,7 +101,7 @@ public class TeleportShopGoodsScreen extends BaseTeleportScreen {
 				"$",
 				button -> {
 					if (this.minecraft != null) {
-						this.minecraft.setScreen(new TeleportShopBuyScreen(this, this.shop, good));
+						this.minecraft.setScreen(new TeleportShopBuyScreen(this, this.viewModel.shop(), good));
 					}
 				}
 			);
@@ -104,18 +109,6 @@ public class TeleportShopGoodsScreen extends BaseTeleportScreen {
 			wrapped.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(PLAYER_ENTRY_HEIGHT));
 			this.listLayout.child(wrapped);
 		}
-	}
-
-	private List<TeleportMenuPayloads.ShopGoodTarget> filteredGoods() {
-		String needle = this.searchQuery == null ? "" : this.searchQuery.trim().toLowerCase(Locale.ROOT);
-		if (needle.isBlank()) {
-			return this.shop.goods();
-		}
-
-		return this.shop.goods().stream().filter(good ->
-			good.name().toLowerCase(Locale.ROOT).contains(needle)
-				|| good.itemId().toLowerCase(Locale.ROOT).contains(needle)
-		).toList();
 	}
 
 	private static Item resolveItem(String rawId) {

@@ -2,22 +2,28 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.ShopCreateViewModel;
+import com.example.client.mvvm.SubmitResult;
 import com.example.client.widget.TeleportIcons;
-import com.example.network.TeleportMenuPayloads;
 import io.wispforest.owo.ui.component.Components;
 import io.wispforest.owo.ui.component.TextBoxComponent;
 import io.wispforest.owo.ui.container.FlowLayout;
 import io.wispforest.owo.ui.core.Sizing;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
 
 public class TeleportShopCreateScreen extends BaseTeleportScreen {
 	private final TeleportShopManageScreen parent;
-	private String input = "";
+	private final ShopCreateViewModel viewModel = new ShopCreateViewModel();
 
 	public TeleportShopCreateScreen(TeleportShopManageScreen parent) {
 		super(ClientI18n.tr("screen.teleportmenu.shop.manage.create"));
 		this.parent = parent;
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
@@ -30,19 +36,17 @@ public class TeleportShopCreateScreen extends BaseTeleportScreen {
 		TextBoxComponent text = Components.textBox(Sizing.fixed(MAIN_BUTTON_WIDTH));
 		text.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(BUTTON_HEIGHT));
 		text.setMaxLength(20);
-		text.text(this.input);
-		text.onChanged().subscribe(value -> this.input = value == null ? "" : value);
+		text.text(this.viewModel.name().get());
+		text.onChanged().subscribe(value -> this.viewModel.name().set(value == null ? "" : value));
 		rootComponent.child(text);
 
 		rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.shop.create.confirm"), TeleportIcons.CONFIRM, () -> {
-			String name = this.input == null ? "" : this.input.trim();
-			if (name.isEmpty()) {
+			if (this.viewModel.create() == SubmitResult.EMPTY) {
 				if (this.minecraft != null && this.minecraft.player != null) {
-					this.minecraft.player.displayClientMessage(ClientI18n.tr("message.teleportmenu.shop_name_empty").withStyle(net.minecraft.ChatFormatting.RED), false);
+					this.minecraft.player.displayClientMessage(ClientI18n.tr("message.teleportmenu.shop_name_empty").withStyle(ChatFormatting.RED), false);
 				}
 				return;
 			}
-			ClientPlayNetworking.send(new TeleportMenuPayloads.CreateShopRequestPayload(name));
 			if (this.minecraft != null) {
 				this.minecraft.setScreen(this.parent);
 			}

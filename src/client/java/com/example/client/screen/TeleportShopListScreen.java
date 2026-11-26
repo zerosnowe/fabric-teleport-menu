@@ -2,7 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
-import com.example.client.TeleportMenuClient;
+import com.example.client.mvvm.ShopListViewModel;
 import com.example.client.widget.OreIconListEntryButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -15,25 +15,29 @@ import io.wispforest.owo.ui.core.Color;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 import java.util.List;
-import java.util.Locale;
 
 public class TeleportShopListScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 174;
 
 	private final TeleportEconomyScreen parent;
-	private String searchQuery = "";
+	private final ShopListViewModel viewModel = new ShopListViewModel();
 	private FlowLayout listLayout;
 
 	public TeleportShopListScreen(TeleportEconomyScreen parent) {
 		super(ClientI18n.tr("screen.teleportmenu.shop.list.title"));
 		this.parent = parent;
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
@@ -45,9 +49,9 @@ public class TeleportShopListScreen extends BaseTeleportScreen {
 		TextBoxComponent search = Components.textBox(Sizing.fixed(MAIN_BUTTON_WIDTH));
 		search.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(BUTTON_HEIGHT));
 		search.setMaxLength(80);
-		search.text(this.searchQuery);
+		search.text(this.viewModel.searchQuery().get());
 		search.onChanged().subscribe(value -> {
-			this.searchQuery = value == null ? "" : value;
+			this.viewModel.searchQuery().set(value == null ? "" : value);
 			this.refreshList();
 		});
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.search")));
@@ -76,7 +80,7 @@ public class TeleportShopListScreen extends BaseTeleportScreen {
 		}
 		this.listLayout.clearChildren();
 
-		List<TeleportMenuPayloads.ShopTarget> shops = filteredShops();
+		List<TeleportMenuPayloads.ShopTarget> shops = this.viewModel.filteredShops();
 		if (shops.isEmpty()) {
 			this.listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.list.empty")));
 			return;
@@ -101,19 +105,6 @@ public class TeleportShopListScreen extends BaseTeleportScreen {
 			wrapped.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(PLAYER_ENTRY_HEIGHT));
 			this.listLayout.child(wrapped);
 		}
-	}
-
-	private List<TeleportMenuPayloads.ShopTarget> filteredShops() {
-		List<TeleportMenuPayloads.ShopTarget> all = TeleportMenuClient.shopTargets();
-		String needle = this.searchQuery == null ? "" : this.searchQuery.trim().toLowerCase(Locale.ROOT);
-		if (needle.isBlank()) {
-			return all;
-		}
-
-		return all.stream().filter(shop ->
-			shop.name().toLowerCase(Locale.ROOT).contains(needle)
-				|| shop.ownerName().toLowerCase(Locale.ROOT).contains(needle)
-		).toList();
 	}
 
 	private static Item resolveItem(String rawId) {

@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.ItemManageViewModel;
 import com.example.client.model.ItemManageEntry;
 import com.example.client.widget.OreRegistryEntryButtonWidget;
 import com.example.client.widget.TeleportIcons;
@@ -13,35 +14,27 @@ import io.wispforest.owo.ui.container.ScrollContainer;
 import io.wispforest.owo.ui.core.Color;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.network.chat.Component;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.Block;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 public class TeleportItemManageScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 184;
 
 	private final TeleportAdminScreen parent;
-	private final Set<String> disabledItemIds;
-	private final List<ItemManageEntry> allEntries;
-	private String searchQuery;
-
+	private final ItemManageViewModel viewModel;
 	private FlowLayout listLayout;
 
 	public TeleportItemManageScreen(TeleportAdminScreen parent, Set<String> disabledItemIds, String searchQuery) {
 		super(ClientI18n.tr("screen.teleportmenu.admin.items.title"));
 		this.parent = parent;
-		this.disabledItemIds = Set.copyOf(disabledItemIds);
-		this.allEntries = buildEntries();
-		this.searchQuery = searchQuery == null ? "" : searchQuery;
+		this.viewModel = new ItemManageViewModel(disabledItemIds, searchQuery);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	public TeleportAdminScreen parentScreen() {
@@ -49,7 +42,7 @@ public class TeleportItemManageScreen extends BaseTeleportScreen {
 	}
 
 	public String searchQuery() {
-		return this.searchQuery;
+		return this.viewModel.searchQuery().get();
 	}
 
 	@Override
@@ -62,9 +55,9 @@ public class TeleportItemManageScreen extends BaseTeleportScreen {
 		TextBoxComponent searchBox = Components.textBox(Sizing.fixed(MAIN_BUTTON_WIDTH));
 		searchBox.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(BUTTON_HEIGHT));
 		searchBox.setMaxLength(120);
-		searchBox.text(this.searchQuery);
+		searchBox.text(this.viewModel.searchQuery().get());
 		searchBox.onChanged().subscribe(value -> {
-			this.searchQuery = value == null ? "" : value;
+			this.viewModel.searchQuery().set(value == null ? "" : value);
 			this.refreshList();
 		});
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.admin.items.search")));
@@ -94,22 +87,21 @@ public class TeleportItemManageScreen extends BaseTeleportScreen {
 		}
 
 		this.listLayout.clearChildren();
-		List<ItemManageEntry> entries = filteredEntries(this.searchQuery);
+		List<ItemManageEntry> entries = this.viewModel.filteredEntries();
 		if (entries.isEmpty()) {
 			this.listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.admin.items.empty")));
 			return;
 		}
 
 		for (ItemManageEntry entry : entries) {
-			boolean disabled = entry.disableSupported() && this.disabledItemIds.contains(entry.targetItemId());
 			OreRegistryEntryButtonWidget widget = new OreRegistryEntryButtonWidget(
 				MAIN_BUTTON_WIDTH,
 				PLAYER_ENTRY_HEIGHT,
 				entry,
-				disabled,
+				this.viewModel.isDisabled(entry),
 				clickedEntry -> {
 					if (this.minecraft != null) {
-						this.minecraft.setScreen(new TeleportItemDisableConfirmScreen(clickedEntry, this, this.disabledItemIds));
+						this.minecraft.setScreen(new TeleportItemDisableConfirmScreen(clickedEntry, this, this.viewModel.disabledItemIds()));
 					}
 				}
 			);
@@ -118,44 +110,5 @@ public class TeleportItemManageScreen extends BaseTeleportScreen {
 			wrapped.sizing(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(PLAYER_ENTRY_HEIGHT));
 			this.listLayout.child(wrapped);
 		}
-	}
-
-	private List<ItemManageEntry> filteredEntries(String query) {
-		String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-		if (needle.isBlank()) {
-			return this.allEntries;
-		}
-
-		return this.allEntries.stream()
-			.filter(entry ->
-				entry.registryId().toLowerCase(Locale.ROOT).contains(needle)
-					|| entry.materialLabel().toLowerCase(Locale.ROOT).contains(needle)
-					|| entry.displayName().toLowerCase(Locale.ROOT).contains(needle))
-			.toList();
-	}
-
-	private static List<ItemManageEntry> buildEntries() {
-		List<ItemManageEntry> entries = new ArrayList<>();
-
-		for (Item item : BuiltInRegistries.ITEM) {
-			String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
-			if ("minecraft:air".equals(itemId)) {
-				continue;
-			}
-			ItemStack icon = new ItemStack(item);
-			entries.add(new ItemManageEntry(itemId, icon.getHoverName().getString(), "Item", itemId, icon));
-		}
-
-		for (Block block : BuiltInRegistries.BLOCK) {
-			String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
-			Item blockItem = block.asItem();
-			String targetId = blockItem != Items.AIR ? BuiltInRegistries.ITEM.getKey(blockItem).toString() : "";
-			ItemStack icon = blockItem != Items.AIR ? new ItemStack(blockItem) : new ItemStack(Items.GRASS_BLOCK);
-			String displayName = blockItem != Items.AIR ? icon.getHoverName().getString() : block.getName().getString();
-			entries.add(new ItemManageEntry(blockId, displayName, "Block", targetId, icon));
-		}
-
-		entries.sort(Comparator.comparing(ItemManageEntry::registryId));
-		return List.copyOf(entries);
 	}
 }

@@ -2,7 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
-import com.example.client.TeleportMenuClient;
+import com.example.client.mvvm.MainMenuViewModel;
 import com.example.client.widget.OreCardButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -21,11 +21,7 @@ public class TeleportMainScreen extends BaseTeleportScreen {
 	private static final int CARD_HEIGHT = 72;
 	private static final int CARD_GAP = 8;
 
-	private final List<TeleportMenuPayloads.PlayerTarget> targets;
-	private final List<TeleportMenuPayloads.HomeTarget> homes;
-	private final List<TeleportMenuPayloads.TerritoryTarget> territories;
-	private final boolean admin;
-	private final Set<String> disabledItemIds;
+	private final MainMenuViewModel viewModel;
 
 	public TeleportMainScreen(
 		List<TeleportMenuPayloads.PlayerTarget> targets,
@@ -35,27 +31,29 @@ public class TeleportMainScreen extends BaseTeleportScreen {
 		Set<String> disabledItemIds
 	) {
 		super(ClientI18n.tr("screen.teleportmenu.main.title"));
-		this.targets = List.copyOf(targets);
-		this.homes = List.copyOf(homes);
-		this.territories = List.copyOf(territories);
-		this.admin = admin;
-		this.disabledItemIds = Set.copyOf(disabledItemIds);
+		this.viewModel = new MainMenuViewModel(targets, homes, territories, admin, disabledItemIds);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	public List<TeleportMenuPayloads.PlayerTarget> targets() {
-		return this.targets;
+		return this.viewModel.targets();
 	}
 
 	public List<TeleportMenuPayloads.HomeTarget> homes() {
-		return this.homes;
+		return this.viewModel.homes();
 	}
 
 	public List<TeleportMenuPayloads.TerritoryTarget> territories() {
-		return this.territories;
+		return this.viewModel.territories();
 	}
 
 	public boolean admin() {
-		return this.admin;
+		return this.viewModel.admin();
 	}
 
 	@Override
@@ -68,17 +66,17 @@ public class TeleportMainScreen extends BaseTeleportScreen {
 		firstRow.gap(CARD_GAP);
 		firstRow.child(cardButton(ClientI18n.tr("screen.teleportmenu.main.players"), TeleportIcons.PLAYERS, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportPlayerListScreen(this.targets, this));
+				this.minecraft.setScreen(new TeleportPlayerListScreen(this.viewModel.targets(), this));
 			}
 		}));
 		firstRow.child(cardButton(ClientI18n.tr("screen.teleportmenu.main.homes"), TeleportIcons.HOMES, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportHomeScreen(this.homes, this));
+				this.minecraft.setScreen(new TeleportHomeScreen(this.viewModel.homes(), this));
 			}
 		}));
 		firstRow.child(cardButton(ClientI18n.tr("screen.teleportmenu.main.territories"), TeleportIcons.TERRITORIES, () -> {
 			if (this.minecraft != null) {
-				this.minecraft.setScreen(new TeleportTerritoryScreen(this.territories, this.targets, this));
+				this.minecraft.setScreen(new TeleportTerritoryScreen(this.viewModel.territories(), this.viewModel.targets(), this));
 			}
 		}));
 		firstRow.child(cardButton(ClientI18n.tr("screen.teleportmenu.main.economy"), TeleportIcons.ECONOMY, () -> {
@@ -95,7 +93,7 @@ public class TeleportMainScreen extends BaseTeleportScreen {
 				return;
 			}
 
-			if (!TeleportMenuClient.requestMomentFeed()) {
+			if (this.viewModel.requestMoments() == MainMenuViewModel.MomentsResult.UNSUPPORTED) {
 				if (this.minecraft.player != null) {
 					this.minecraft.player.sendSystemMessage(ClientI18n.tr("message.teleportmenu.moment_unsupported"));
 				}
@@ -104,10 +102,10 @@ public class TeleportMainScreen extends BaseTeleportScreen {
 
 			this.minecraft.setScreen(new TeleportMomentScreen(this));
 		}));
-		if (this.admin) {
+		if (this.viewModel.admin()) {
 			secondRow.child(cardButton(ClientI18n.tr("screen.teleportmenu.main.admin"), TeleportIcons.ADMIN, () -> {
 				if (this.minecraft != null) {
-					this.minecraft.setScreen(new TeleportAdminScreen(this, this.disabledItemIds));
+					this.minecraft.setScreen(new TeleportAdminScreen(this, this.viewModel.disabledItemIds()));
 				}
 			}));
 		}

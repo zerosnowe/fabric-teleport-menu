@@ -1,6 +1,8 @@
 package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
+
+import com.example.client.mvvm.ItemSlotPickerViewModel;
 import com.example.client.widget.OreItemSlotButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -11,10 +13,8 @@ import io.wispforest.owo.ui.container.ScrollContainer;
 import io.wispforest.owo.ui.core.Color;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
-import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
 
-import java.util.ArrayList;
 import java.util.List;
 
 public class TeleportShopGoodPickerScreen extends BaseTeleportScreen {
@@ -27,7 +27,7 @@ public class TeleportShopGoodPickerScreen extends BaseTeleportScreen {
 	private final ItemStack previousSelected;
 	private final String amountInput;
 	private final String priceInput;
-	private List<ItemStack> inventoryStacks = List.of();
+	private final ItemSlotPickerViewModel viewModel = new ItemSlotPickerViewModel();
 
 	public TeleportShopGoodPickerScreen(
 		TeleportShopEditScreen parent,
@@ -45,10 +45,15 @@ public class TeleportShopGoodPickerScreen extends BaseTeleportScreen {
 	}
 
 	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
+	}
+
+	@Override
 	protected void build(FlowLayout rootComponent) {
 		this.configureRoot(rootComponent);
 		rootComponent.gap(6);
-		this.inventoryStacks = collectInventoryStacks();
 
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.select_chest_title")).shadow(true));
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.select_hint")));
@@ -56,15 +61,16 @@ public class TeleportShopGoodPickerScreen extends BaseTeleportScreen {
 		FlowLayout rows = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 		rows.gap(2);
 
-		if (this.inventoryStacks.isEmpty()) {
+		List<ItemStack> inventoryStacks = this.viewModel.inventoryStacks();
+		if (inventoryStacks.isEmpty()) {
 			rows.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.empty")));
 		} else {
-			for (int start = 0; start < this.inventoryStacks.size(); start += COLUMNS) {
+			for (int start = 0; start < inventoryStacks.size(); start += COLUMNS) {
 				FlowLayout row = Containers.horizontalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 				row.gap(2);
-				int end = Math.min(start + COLUMNS, this.inventoryStacks.size());
+				int end = Math.min(start + COLUMNS, inventoryStacks.size());
 				for (int i = start; i < end; i++) {
-					ItemStack stack = this.inventoryStacks.get(i);
+					ItemStack stack = inventoryStacks.get(i);
 					OreItemSlotButtonWidget slotButton = new OreItemSlotButtonWidget(SLOT_SIZE, stack, button -> {
 						if (this.minecraft != null) {
 							this.minecraft.setScreen(new TeleportShopAddGoodScreen(this.parent, this.shop, button.stack(), this.amountInput, this.priceInput));
@@ -89,30 +95,5 @@ public class TeleportShopGoodPickerScreen extends BaseTeleportScreen {
 				this.minecraft.setScreen(new TeleportShopAddGoodScreen(this.parent, this.shop, this.previousSelected, this.amountInput, this.priceInput));
 			}
 		}));
-	}
-
-	private List<ItemStack> collectInventoryStacks() {
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft == null || minecraft.player == null) {
-			return List.of();
-		}
-
-		List<ItemStack> result = new ArrayList<>();
-		for (ItemStack stack : minecraft.player.getInventory().items) {
-			if (!stack.isEmpty()) {
-				result.add(stack.copy());
-			}
-		}
-		for (ItemStack stack : minecraft.player.getInventory().armor) {
-			if (!stack.isEmpty()) {
-				result.add(stack.copy());
-			}
-		}
-		for (ItemStack stack : minecraft.player.getInventory().offhand) {
-			if (!stack.isEmpty()) {
-				result.add(stack.copy());
-			}
-		}
-		return result;
 	}
 }

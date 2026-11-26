@@ -1,6 +1,8 @@
 package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
+
+import com.example.client.mvvm.BoxShopViewModel;
 import com.example.client.widget.OreShopGoodCardButtonWidget;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
@@ -24,28 +26,35 @@ public class TeleportBoxShopScreen extends BaseTeleportScreen {
 	private static final int CARD_GAP = 8;
 	private static final int CARDS_PER_ROW = 4;
 
-	private final TeleportMenuPayloads.BoxShopTarget boxShop;
+	private final BoxShopViewModel viewModel;
 	private boolean openedNaming = false;
 
 	public TeleportBoxShopScreen(TeleportMenuPayloads.BoxShopTarget boxShop) {
 		super(Component.literal(boxShop.name()));
-		this.boxShop = boxShop;
+		this.viewModel = new BoxShopViewModel(boxShop);
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	@Override
 	protected void build(FlowLayout rootComponent) {
-		if (this.boxShop.owner() && this.boxShop.needsNaming() && !this.openedNaming && this.minecraft != null) {
+		TeleportMenuPayloads.BoxShopTarget boxShop = this.viewModel.boxShop();
+		if (this.viewModel.shouldOpenNaming() && !this.openedNaming && this.minecraft != null) {
 			this.openedNaming = true;
-			this.minecraft.setScreen(new TeleportBoxShopNameScreen(this.boxShop, this));
+			this.minecraft.setScreen(new TeleportBoxShopNameScreen(boxShop, this));
 			return;
 		}
 
 		this.configureRoot(rootComponent);
 		rootComponent.gap(8);
-		rootComponent.child(Components.label(Component.literal(this.boxShop.name())).shadow(true));
-		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.boxshop.owner", this.boxShop.ownerName())));
+		rootComponent.child(Components.label(Component.literal(boxShop.name())).shadow(true));
+		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.boxshop.owner", boxShop.ownerName())));
 
-		List<TeleportMenuPayloads.ShopGoodTarget> goods = this.boxShop.goods();
+		List<TeleportMenuPayloads.ShopGoodTarget> goods = boxShop.goods();
 		if (goods.isEmpty()) {
 			rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.shop.goods.empty")));
 		} else {
@@ -65,7 +74,7 @@ public class TeleportBoxShopScreen extends BaseTeleportScreen {
 						ClientI18n.tr("screen.teleportmenu.shop.buy.price", String.format(Locale.ROOT, "%.2f", good.price())).getString(),
 						button -> {
 							if (this.minecraft != null) {
-								this.minecraft.setScreen(new TeleportBoxShopBuyScreen(this, this.boxShop, good));
+								this.minecraft.setScreen(new TeleportBoxShopBuyScreen(this, boxShop, good));
 							}
 						}
 					);
@@ -77,10 +86,10 @@ public class TeleportBoxShopScreen extends BaseTeleportScreen {
 			}
 		}
 
-		if (this.boxShop.owner()) {
+		if (boxShop.owner()) {
 			rootComponent.child(menuButton(ClientI18n.tr("screen.teleportmenu.boxshop.manage"), TeleportIcons.MANAGE, () -> {
 				if (this.minecraft != null) {
-					this.minecraft.setScreen(new TeleportBoxShopManageScreen(this.boxShop, this));
+					this.minecraft.setScreen(new TeleportBoxShopManageScreen(boxShop, this));
 				}
 			}));
 		}
