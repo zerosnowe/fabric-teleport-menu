@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.TeleportMenuClient;
 import com.example.client.i18n.ClientI18n;
+import com.example.client.mvvm.MomentComposeViewModel;
 import com.example.client.widget.TeleportIcons;
 import com.example.network.TeleportMenuPayloads;
 import io.wispforest.owo.ui.component.Components;
@@ -15,19 +16,17 @@ import net.minecraft.network.chat.Component;
  * "存为草稿" persists the current text through the server JSON store.
  */
 public class TeleportMomentComposeScreen extends BaseTeleportScreen {
-	public static final int MAX_LENGTH = 256;
+	public static final int MAX_LENGTH = MomentComposeViewModel.MAX_LENGTH;
 
 	private static final int INPUT_HEIGHT = 112;
 
 	private final TeleportMomentScreen parent;
-
-	private TextAreaComponent input;
-	private String inputText;
+	private final MomentComposeViewModel viewModel;
 
 	public TeleportMomentComposeScreen(TeleportMomentScreen parent) {
 		super(ClientI18n.tr("screen.teleportmenu.moments.compose.title"));
 		this.parent = parent;
-		this.inputText = TeleportMenuClient.momentDraft();
+		this.viewModel = new MomentComposeViewModel(TeleportMenuClient.momentDraft());
 	}
 
 	public TeleportMomentScreen parentScreen() {
@@ -44,9 +43,8 @@ public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 
 		TextAreaComponent textArea = Components.textArea(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(INPUT_HEIGHT));
 		textArea.setCharacterLimit(MAX_LENGTH);
-		textArea.text(this.inputText);
-		textArea.onChanged().subscribe(value -> this.inputText = value == null ? "" : value);
-		this.input = textArea;
+		textArea.text(this.viewModel.text().get());
+		textArea.onChanged().subscribe(value -> this.viewModel.text().set(value == null ? "" : value));
 		rootComponent.child(textArea);
 
 		rootComponent.child(this.menuButton(ClientI18n.tr("screen.teleportmenu.moments.compose.save"), TeleportIcons.CONFIRM, this::publish));
@@ -59,58 +57,27 @@ public class TeleportMomentComposeScreen extends BaseTeleportScreen {
 	}
 
 	private void publish() {
-		String content = this.normalizedInput();
-		if (content == null) {
-			return;
-		}
-
-		if (content.isEmpty()) {
-			this.showMessage(ClientI18n.tr("message.teleportmenu.moment_empty"));
-			return;
-		}
-
-		if (!TeleportMenuClient.sendMomentPayload(new TeleportMenuPayloads.PostMomentPayload(content))) {
-			this.showMessage(ClientI18n.tr("message.teleportmenu.moment_unsupported"));
-			return;
-		}
-
-		if (this.minecraft != null) {
-			this.minecraft.setScreen(this.parent);
+		switch (this.viewModel.publish()) {
+			case OK -> {
+				if (this.minecraft != null) {
+					this.minecraft.setScreen(this.parent);
+				}
+			}
+			case EMPTY -> this.showMessage(ClientI18n.tr("message.teleportmenu.moment_empty"));
+			case TOO_LONG -> this.showMessage(ClientI18n.tr("message.teleportmenu.moment_too_long", MAX_LENGTH));
+			case UNSUPPORTED -> this.showMessage(ClientI18n.tr("message.teleportmenu.moment_unsupported"));
 		}
 	}
 
 	private void saveDraft() {
-		String content = this.currentText();
-		if (content.strip().length() > MAX_LENGTH) {
-			this.showMessage(ClientI18n.tr("message.teleportmenu.moment_too_long", MAX_LENGTH));
-			return;
+		switch (this.viewModel.saveDraft()) {
+			case OK -> {
+			}
+			case TOO_LONG -> this.showMessage(ClientI18n.tr("message.teleportmenu.moment_too_long", MAX_LENGTH));
+			case UNSUPPORTED -> this.showMessage(ClientI18n.tr("message.teleportmenu.moment_unsupported"));
+			default -> {
+			}
 		}
-
-		if (!TeleportMenuClient.sendMomentPayload(new TeleportMenuPayloads.SaveMomentDraftPayload(content))) {
-			this.showMessage(ClientI18n.tr("message.teleportmenu.moment_unsupported"));
-		}
-	}
-
-	private String currentText() {
-		if (this.input != null) {
-			return this.input.getValue();
-		}
-
-		return this.inputText == null ? "" : this.inputText;
-	}
-
-	/**
-	 * @return the trimmed text ready for publishing, or {@code null} when the
-	 *         length check already reported a problem.
-	 */
-	private String normalizedInput() {
-		String content = this.currentText().strip();
-		if (content.length() > MAX_LENGTH) {
-			this.showMessage(ClientI18n.tr("message.teleportmenu.moment_too_long", MAX_LENGTH));
-			return null;
-		}
-
-		return content;
 	}
 
 	private void showMessage(Component message) {

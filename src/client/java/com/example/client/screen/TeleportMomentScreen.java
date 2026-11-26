@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.TeleportMenuClient;
 import com.example.client.i18n.ClientI18n;
+import com.example.client.mvvm.MomentFeedViewModel;
 import com.example.client.widget.OreSmallActionButtonWidget;
 import com.example.client.widget.OreTabButtonWidget;
 import com.example.client.widget.TeleportIcons;
@@ -42,17 +43,11 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 	private static final int DELETE_WIDTH = 40;
 	private static final int CARD_BACKGROUND = 0x40202836;
 
-	private enum Tab {
-		LATEST,
-		HOT
-	}
-
 	private final TeleportMainScreen mainScreen;
 	private final Map<UUID, OreSmallActionButtonWidget> likeButtons = new LinkedHashMap<>();
 	private final List<UUID> renderedOrder = new ArrayList<>();
+	private final MomentFeedViewModel viewModel;
 
-	private List<TeleportMenuPayloads.MomentEntry> moments;
-	private Tab tab = Tab.LATEST;
 	private FlowLayout tabRow;
 	private FlowLayout feedLayout;
 	private ScrollContainer<FlowLayout> feedScroll;
@@ -60,7 +55,7 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 	public TeleportMomentScreen(TeleportMainScreen mainScreen) {
 		super(ClientI18n.tr("screen.teleportmenu.moments.title"));
 		this.mainScreen = mainScreen;
-		this.moments = List.copyOf(TeleportMenuClient.momentEntries());
+		this.viewModel = new MomentFeedViewModel(TeleportMenuClient.momentEntries());
 	}
 
 	public TeleportMainScreen mainScreen() {
@@ -71,7 +66,7 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 	protected void build(FlowLayout rootComponent) {
 		this.configureRoot(rootComponent);
 		rootComponent.gap(6);
-		this.moments = List.copyOf(TeleportMenuClient.momentEntries());
+		this.viewModel.applyFeed(List.copyOf(TeleportMenuClient.momentEntries()));
 		rootComponent.child(Components.label(ClientI18n.tr("screen.teleportmenu.moments.title")).shadow(true));
 
 		this.tabRow = Containers.horizontalFlow(Sizing.fixed(FEED_WIDTH), Sizing.fixed(TAB_HEIGHT));
@@ -112,7 +107,7 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 			return;
 		}
 
-		this.moments = List.copyOf(entries);
+		this.viewModel.applyFeed(entries);
 		if (this.feedLayout == null) {
 			return;
 		}
@@ -125,12 +120,12 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 		this.refreshFeed();
 	}
 
-	private void switchTab(Tab nextTab) {
-		if (this.tab == nextTab) {
+	private void switchTab(MomentFeedViewModel.Tab nextTab) {
+		if (!this.viewModel.switchTab(nextTab).canExecute()) {
 			return;
 		}
 
-		this.tab = nextTab;
+		this.viewModel.switchTab(nextTab).execute();
 		this.rebuildTabs();
 		this.refreshFeed();
 		if (this.feedScroll != null) {
@@ -144,16 +139,16 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 		}
 
 		this.tabRow.clearChildren();
-		this.tabRow.child(this.tabButton(Tab.LATEST, "screen.teleportmenu.moments.tab.latest"));
-		this.tabRow.child(this.tabButton(Tab.HOT, "screen.teleportmenu.moments.tab.hot"));
+		this.tabRow.child(this.tabButton(MomentFeedViewModel.Tab.LATEST, "screen.teleportmenu.moments.tab.latest"));
+		this.tabRow.child(this.tabButton(MomentFeedViewModel.Tab.HOT, "screen.teleportmenu.moments.tab.hot"));
 	}
 
-	private io.wispforest.owo.ui.core.Component tabButton(Tab tabTarget, String labelKey) {
+	private io.wispforest.owo.ui.core.Component tabButton(MomentFeedViewModel.Tab tabTarget, String labelKey) {
 		OreTabButtonWidget widget = new OreTabButtonWidget(
 			TAB_WIDTH,
 			TAB_HEIGHT,
 			ClientI18n.tr(labelKey),
-			this.tab == tabTarget,
+			this.viewModel.tab().get() == tabTarget,
 			button -> this.switchTab(tabTarget)
 		);
 		var wrapped = Components.wrapVanillaWidget(widget);
@@ -184,20 +179,7 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 	}
 
 	private List<TeleportMenuPayloads.MomentEntry> sortedMoments() {
-		List<TeleportMenuPayloads.MomentEntry> sorted = new ArrayList<>(this.moments);
-		Comparator<TeleportMenuPayloads.MomentEntry> newestFirst =
-			Comparator.comparingLong(TeleportMenuPayloads.MomentEntry::createdAt).reversed();
-
-		if (this.tab == Tab.HOT) {
-			sorted.sort(Comparator
-				.comparingInt(TeleportMenuPayloads.MomentEntry::likeCount)
-				.reversed()
-				.thenComparing(newestFirst));
-		} else {
-			sorted.sort(newestFirst);
-		}
-
-		return sorted;
+		return this.viewModel.sortedMoments();
 	}
 
 	private FlowLayout buildCard(TeleportMenuPayloads.MomentEntry moment) {
@@ -247,7 +229,7 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 	}
 
 	private void refreshLikeButtons() {
-		for (TeleportMenuPayloads.MomentEntry moment : this.moments) {
+		for (TeleportMenuPayloads.MomentEntry moment : this.viewModel.moments().get()) {
 			OreSmallActionButtonWidget button = this.likeButtons.get(moment.id());
 			if (button != null) {
 				button.setMessage(likeLabel(moment));
@@ -256,12 +238,13 @@ public class TeleportMomentScreen extends BaseTeleportScreen {
 	}
 
 	private boolean hasSamePosts() {
-		if (this.moments.size() != this.renderedOrder.size()) {
+		List<TeleportMenuPayloads.MomentEntry> moments = this.viewModel.moments().get();
+		if (moments.size() != this.renderedOrder.size()) {
 			return false;
 		}
 
 		Set<UUID> incoming = new HashSet<>();
-		for (TeleportMenuPayloads.MomentEntry moment : this.moments) {
+		for (TeleportMenuPayloads.MomentEntry moment : moments) {
 			incoming.add(moment.id());
 		}
 

@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.HomeListViewModel;
 import com.example.client.widget.OreHomeEntryButtonWidget;
 import com.example.client.widget.OreSmallActionButtonWidget;
 import com.example.client.widget.TeleportIcons;
@@ -22,13 +23,19 @@ public class TeleportHomeScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 176;
 	private static final int MORE_BUTTON_WIDTH = 30;
 
-	private final List<TeleportMenuPayloads.HomeTarget> homes;
+	private final HomeListViewModel viewModel;
 	private final TeleportMainScreen mainScreen;
 
 	public TeleportHomeScreen(List<TeleportMenuPayloads.HomeTarget> homes, TeleportMainScreen mainScreen) {
 		super(ClientI18n.tr("screen.teleportmenu.homes.title"));
-		this.homes = List.copyOf(homes);
+		this.viewModel = new HomeListViewModel(homes);
 		this.mainScreen = mainScreen;
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	public TeleportMainScreen mainScreen() {
@@ -45,10 +52,11 @@ public class TeleportHomeScreen extends BaseTeleportScreen {
 		FlowLayout listLayout = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 		listLayout.gap(3);
 
-		if (this.homes.isEmpty()) {
+		List<TeleportMenuPayloads.HomeTarget> homes = this.viewModel.homes().get();
+		if (homes.isEmpty()) {
 			listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.homes.empty")));
 		} else {
-			for (TeleportMenuPayloads.HomeTarget home : this.homes) {
+			for (TeleportMenuPayloads.HomeTarget home : homes) {
 				FlowLayout row = Containers.horizontalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(PLAYER_ENTRY_HEIGHT));
 				row.gap(4);
 
@@ -62,7 +70,7 @@ public class TeleportHomeScreen extends BaseTeleportScreen {
 					home.z(),
 					home.iconItemId(),
 					homeId -> {
-						ClientPlayNetworking.send(new TeleportMenuPayloads.TeleportHomeRequestPayload(homeId));
+						this.viewModel.teleport(home).execute();
 						this.onClose();
 					}
 				);

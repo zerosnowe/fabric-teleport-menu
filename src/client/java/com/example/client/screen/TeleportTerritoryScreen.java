@@ -2,6 +2,7 @@ package com.example.client.screen;
 
 import com.example.client.i18n.ClientI18n;
 
+import com.example.client.mvvm.TerritoryListViewModel;
 import com.example.client.widget.OreHomeEntryButtonWidget;
 import com.example.client.widget.OreSmallActionButtonWidget;
 import com.example.client.widget.TeleportIcons;
@@ -23,15 +24,21 @@ public class TeleportTerritoryScreen extends BaseTeleportScreen {
 	private static final int LIST_HEIGHT = 176;
 	private static final int MORE_BUTTON_WIDTH = 30;
 
-	private final List<TeleportMenuPayloads.TerritoryTarget> territories;
+	private final TerritoryListViewModel viewModel;
 	private final List<TeleportMenuPayloads.PlayerTarget> players;
 	private final TeleportMainScreen mainScreen;
 
 	public TeleportTerritoryScreen(List<TeleportMenuPayloads.TerritoryTarget> territories, List<TeleportMenuPayloads.PlayerTarget> players, TeleportMainScreen mainScreen) {
 		super(ClientI18n.tr("screen.teleportmenu.territories.title"));
-		this.territories = List.copyOf(territories);
+		this.viewModel = new TerritoryListViewModel(territories);
 		this.players = List.copyOf(players);
 		this.mainScreen = mainScreen;
+	}
+
+	@Override
+	public void removed() {
+		this.viewModel.dispose();
+		super.removed();
 	}
 
 	public TeleportMainScreen mainScreen() {
@@ -48,10 +55,11 @@ public class TeleportTerritoryScreen extends BaseTeleportScreen {
 		FlowLayout listLayout = Containers.verticalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.content());
 		listLayout.gap(3);
 
-		if (this.territories.isEmpty()) {
+		List<TeleportMenuPayloads.TerritoryTarget> territories = this.viewModel.territories().get();
+		if (territories.isEmpty()) {
 			listLayout.child(Components.label(ClientI18n.tr("screen.teleportmenu.territories.empty")));
 		} else {
-			for (TeleportMenuPayloads.TerritoryTarget territory : this.territories) {
+			for (TeleportMenuPayloads.TerritoryTarget territory : territories) {
 				FlowLayout row = Containers.horizontalFlow(Sizing.fixed(MAIN_BUTTON_WIDTH), Sizing.fixed(PLAYER_ENTRY_HEIGHT));
 				row.gap(4);
 
@@ -65,7 +73,7 @@ public class TeleportTerritoryScreen extends BaseTeleportScreen {
 					territory.minZ(),
 					territory.iconItemId(),
 					territoryId -> {
-						ClientPlayNetworking.send(new TeleportMenuPayloads.TeleportTerritoryRequestPayload(territoryId));
+						this.viewModel.teleport(territory).execute();
 						this.onClose();
 					}
 				);
