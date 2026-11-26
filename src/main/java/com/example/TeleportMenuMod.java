@@ -1,12 +1,22 @@
 package com.example;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
+import com.example.network.TeleportMenuPayloads;
+import com.example.server.model.BoxShopNames;
+import com.example.server.model.BoxShopPoint;
+import com.example.server.model.HomePoint;
+import com.example.server.model.MomentContent;
+import com.example.server.model.MomentPoint;
+import com.example.server.model.ShopGood;
+import com.example.server.model.ShopPoint;
+import com.example.server.model.TerritoryPermission;
+import com.example.server.model.TerritoryPoint;
+import com.example.server.storage.DatabaseManager;
+import com.example.server.storage.JsonDataImporter;
+import com.example.server.storage.PersistedSnapshot;
+import com.example.server.storage.ServerDataStore;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.example.network.TeleportMenuPayloads;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
@@ -97,6 +107,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.sql.SQLException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -153,9 +164,9 @@ public class TeleportMenuMod implements ModInitializer {
 	private static final int DEFAULT_SHOP_LIMIT = 2;
 	private static final int SHOP_LIMIT_EXPAND_COST = 100;
 	private static final int SHOP_DELETE_COST = 10;
-	private static final int MOMENT_MAX_CONTENT_LENGTH = 256;
+	private static final int MOMENT_MAX_CONTENT_LENGTH = MomentContent.MAX_LENGTH;
 	private static final int MOMENT_MAX_COUNT = 100;
-	private static final String DEFAULT_BOX_SHOP_NAME = "\u7bb1\u5b50\u5546\u5e97";
+	private static final String DEFAULT_BOX_SHOP_NAME = BoxShopNames.DEFAULT_NAME;
 	private static final String BOX_SHOP_HOLOGRAM_TAG = "teleportmenu_boxshop_holo";
 	private static boolean ECONOMY_API_INITIALIZED = false;
 	private static boolean ECONOMY_API_READY = false;
@@ -165,29 +176,19 @@ public class TeleportMenuMod implements ModInitializer {
 	private static Method ECONOMY_SET = null;
 	private static Method ECONOMY_RESET = null;
 	private static Method ECONOMY_FORMAT = null;
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Map<String, Map<String, String>> SERVER_LOCALIZATIONS = new ConcurrentHashMap<>();
 	private static long LOCALIZATION_VERSION = 1L;
 	private static final String DATA_DIR_NAME = "teleport-menu-mod";
 	private static final String DATA_FILE_NAME = "data.json";
+	private static final String DATA_DB_FILE_NAME = "data.sqlite";
+	private static ServerDataStore STORAGE = null;
 	private static MinecraftServer ACTIVE_SERVER = null;
 
 	private static final DustParticleOptions TERRITORY_SELECTION_PARTICLE = new DustParticleOptions(new Vector3f(0.25F, 1.0F, 0.25F), 1.0F);
 	private static long SERVER_TICK = 0L;
 
 	private static String sanitizeBoxShopName(String rawName) {
-		String sanitized = rawName == null ? "" : rawName
-			.replace('\r', ' ')
-			.replace('\n', ' ')
-			.replace('\t', ' ')
-			.trim();
-		if (sanitized.isEmpty()) {
-			sanitized = DEFAULT_BOX_SHOP_NAME;
-		}
-		if (sanitized.length() > 20) {
-			sanitized = sanitized.substring(0, 20);
-		}
-		return sanitized;
+		return BoxShopNames.sanitize(rawName);
 	}
 
 	private static final List<Item> HOME_ICON_POOL = List.of(
@@ -332,6 +333,7 @@ public class TeleportMenuMod implements ModInitializer {
 
 	private static void onServerStopping(MinecraftServer server) {
 		savePersistentData(server);
+		closeStorageQuietly();
 		ACTIVE_SERVER = null;
 		TERRITORY_SELECTIONS.clear();
 		TERRITORY_HUD_STATES.clear();
@@ -356,8 +358,12 @@ public class TeleportMenuMod implements ModInitializer {
 		return server.getWorldPath(LevelResource.ROOT).resolve("data").resolve(DATA_DIR_NAME);
 	}
 
-	private static Path dataFile(MinecraftServer server) {
+	private static Path legacyDataFile(MinecraftServer server) {
 		return dataDir(server).resolve(DATA_FILE_NAME);
+	}
+
+	private static Path databaseFile(MinecraftServer server) {
+		return dataDir(server).resolve(DATA_DB_FILE_NAME);
 	}
 
 	private static void persistDataIfPossible() {
@@ -367,6 +373,24 @@ public class TeleportMenuMod implements ModInitializer {
 	}
 
 	private static void loadPersistentData(MinecraftServer server) {
+		clearPersistentState();
+
+		try {
+			Path directory = dataDir(server);
+			Files.createDirectories(directory);
+
+			ServerDataStore store = new ServerDataStore(new DatabaseManager(databaseFile(server)));
+			STORAGE = store;
+			JsonDataImporter.importIfNeeded(store, legacyDataFile(server));
+			applyLoadedData(store);
+			LOGGER.info("Loaded teleport menu data from {}", databaseFile(server));
+		} catch (Exception error) {
+			LOGGER.error("Failed to load teleport menu data from SQLite", error);
+			closeStorageQuietly();
+		}
+	}
+
+	private static void clearPersistentState() {
 		PLAYER_HOMES.clear();
 		PLAYER_TERRITORIES.clear();
 		PLAYER_SHOPS.clear();
@@ -379,503 +403,69 @@ public class TeleportMenuMod implements ModInitializer {
 		MOMENTS.clear();
 		MOMENT_DRAFTS.clear();
 		ECONOMY_SIDEBAR_HIDDEN.clear();
+	}
 
-		Path file = dataFile(server);
-		if (!Files.exists(file)) {
+	private static void applyLoadedData(ServerDataStore store) throws SQLException {
+		PLAYER_HOMES.putAll(store.loadHomes());
+		PLAYER_TERRITORIES.putAll(store.loadTerritories());
+		PLAYER_SHOPS.putAll(store.loadShops());
+
+		for (Map.Entry<UUID, BoxShopPoint> entry : store.loadBoxShops().entrySet()) {
+			BoxShopPoint boxShop = entry.getValue();
+			BOX_SHOPS.put(boxShop.id(), boxShop);
+			BOX_SHOP_SHOP_IDS.add(boxShop.shopId());
+			if (ACTIVE_SERVER != null) {
+				ensureBoxShopBlock(ACTIVE_SERVER, boxShop);
+				refreshBoxShopHologram(ACTIVE_SERVER, boxShop);
+			}
+		}
+
+		for (Map.Entry<UUID, Integer> entry : store.loadShopLimits().entrySet()) {
+			PLAYER_SHOP_LIMITS.put(entry.getKey(), Math.max(DEFAULT_SHOP_LIMIT, entry.getValue()));
+		}
+
+		PLAYER_REWARDED_EQUIPMENT.putAll(store.loadRewardedEquipment());
+		MOMENTS.putAll(store.loadMoments());
+		MOMENT_DRAFTS.putAll(store.loadMomentDrafts());
+		DISABLED_ITEM_IDS.addAll(store.loadDisabledItems());
+		ECONOMY_SIDEBAR_HIDDEN.addAll(store.loadEconomySidebarHidden());
+	}
+
+	private static void savePersistentData(MinecraftServer server) {
+		ServerDataStore store = STORAGE;
+		if (store == null) {
 			return;
 		}
 
 		try {
-			String json = Files.readString(file, StandardCharsets.UTF_8);
-			JsonElement rootElement = JsonParser.parseString(json);
-			if (!rootElement.isJsonObject()) {
-				LOGGER.warn("Teleport menu data file is not a JSON object: {}", file);
-				return;
-			}
-
-			JsonObject root = rootElement.getAsJsonObject();
-			readDisabledItems(root);
-			readHomes(root);
-			readTerritories(root);
-			readShops(root);
-			readBoxShops(root);
-			readShopLimits(root);
-			readRewardedEquipment(root);
-			readMoments(root);
-			readMomentDrafts(root);
-			readEconomySidebarHidden(root);
-			LOGGER.info("Loaded teleport menu data from {}", file);
-		} catch (Exception error) {
-			LOGGER.error("Failed to load teleport menu data from {}", file, error);
-		}
-	}
-
-	private static void savePersistentData(MinecraftServer server) {
-		try {
-			Path dir = dataDir(server);
-			Files.createDirectories(dir);
-			Path file = dataFile(server);
-
-			JsonObject root = new JsonObject();
-			root.addProperty("schema", 2);
-			root.add("disabledItems", writeDisabledItems());
-			root.add("homes", writeHomes());
-			root.add("territories", writeTerritories());
-			root.add("shops", writeShops());
-			root.add("boxShops", writeBoxShops());
-			root.add("shopLimits", writeShopLimits());
-			root.add("rewardedEquipment", writeRewardedEquipment());
-			root.add("moments", writeMoments());
-			root.add("momentDrafts", writeMomentDrafts());
-			root.add("economySidebarHiddenPlayerIds", writeEconomySidebarHidden());
-
-			Files.writeString(file, GSON.toJson(root), StandardCharsets.UTF_8);
-		} catch (IOException error) {
+			store.saveAll(new PersistedSnapshot(
+				PLAYER_HOMES,
+				PLAYER_TERRITORIES,
+				PLAYER_SHOPS,
+				BOX_SHOPS,
+				PLAYER_SHOP_LIMITS,
+				PLAYER_REWARDED_EQUIPMENT,
+				MOMENTS,
+				MOMENT_DRAFTS,
+				DISABLED_ITEM_IDS,
+				ECONOMY_SIDEBAR_HIDDEN
+			));
+		} catch (SQLException error) {
 			LOGGER.error("Failed to save teleport menu data", error);
 		}
 	}
 
-	private static JsonArray writeDisabledItems() {
-		JsonArray array = new JsonArray();
-		getDisabledItemIdList().forEach(array::add);
-		return array;
-	}
-
-	private static JsonArray writeEconomySidebarHidden() {
-		JsonArray array = new JsonArray();
-		ECONOMY_SIDEBAR_HIDDEN.stream()
-			.sorted(Comparator.comparing(UUID::toString))
-			.forEach(playerId -> array.add(playerId.toString()));
-		return array;
-	}
-
-	private static JsonArray writeHomes() {
-		JsonArray array = new JsonArray();
-		for (Map.Entry<UUID, List<HomePoint>> entry : PLAYER_HOMES.entrySet()) {
-			for (HomePoint home : entry.getValue()) {
-				JsonObject homeObj = new JsonObject();
-				homeObj.addProperty("owner", entry.getKey().toString());
-				homeObj.addProperty("id", home.id().toString());
-				homeObj.addProperty("name", home.name());
-				homeObj.addProperty("x", home.x());
-				homeObj.addProperty("y", home.y());
-				homeObj.addProperty("z", home.z());
-				homeObj.addProperty("iconItemId", home.iconItemId());
-				array.add(homeObj);
-			}
-		}
-		return array;
-	}
-
-	private static JsonArray writeTerritories() {
-		JsonArray array = new JsonArray();
-		for (Map.Entry<UUID, List<TerritoryPoint>> entry : PLAYER_TERRITORIES.entrySet()) {
-			for (TerritoryPoint territory : entry.getValue()) {
-				JsonObject territoryObj = new JsonObject();
-				territoryObj.addProperty("owner", entry.getKey().toString());
-				territoryObj.addProperty("id", territory.id().toString());
-				territoryObj.addProperty("ownerName", territory.ownerName());
-				territoryObj.addProperty("name", territory.name());
-				territoryObj.addProperty("dimensionId", territory.dimensionId().toString());
-				territoryObj.addProperty("minX", territory.minX());
-				territoryObj.addProperty("minY", territory.minY());
-				territoryObj.addProperty("minZ", territory.minZ());
-				territoryObj.addProperty("maxX", territory.maxX());
-				territoryObj.addProperty("maxY", territory.maxY());
-				territoryObj.addProperty("maxZ", territory.maxZ());
-				territoryObj.addProperty("iconItemId", territory.iconItemId());
-				territoryObj.addProperty("buildBreakAllowed", territory.buildBreakAllowed());
-				territoryObj.addProperty("containerAllowed", territory.containerAllowed());
-				territoryObj.addProperty("interactAllowed", territory.interactAllowed());
-				territoryObj.addProperty("damageEntitiesAllowed", territory.damageEntitiesAllowed());
-				territoryObj.addProperty("blockUseAllowed", territory.blockUseAllowed());
-				JsonArray whitelistArray = new JsonArray();
-				territory.whitelistPlayerIds().forEach(uuid -> whitelistArray.add(uuid.toString()));
-				territoryObj.add("whitelist", whitelistArray);
-				array.add(territoryObj);
-			}
-		}
-		return array;
-	}
-
-	private static JsonArray writeShops() {
-		JsonArray array = new JsonArray();
-		for (Map.Entry<UUID, List<ShopPoint>> entry : PLAYER_SHOPS.entrySet()) {
-			for (ShopPoint shop : entry.getValue()) {
-				JsonObject obj = new JsonObject();
-				obj.addProperty("owner", entry.getKey().toString());
-				obj.addProperty("id", shop.id().toString());
-				obj.addProperty("name", shop.name());
-				obj.addProperty("ownerName", shop.ownerName());
-				obj.addProperty("iconItemId", shop.iconItemId());
-				JsonArray goodsArray = new JsonArray();
-				for (ShopGood good : shop.goods()) {
-					JsonObject goodObj = new JsonObject();
-					goodObj.addProperty("itemId", good.itemId());
-					goodObj.addProperty("name", good.name());
-					goodObj.addProperty("iconItemId", good.iconItemId());
-					goodObj.addProperty("stock", good.stock());
-					goodObj.addProperty("price", good.price());
-					goodsArray.add(goodObj);
-				}
-				obj.add("goods", goodsArray);
-				array.add(obj);
-			}
-		}
-		return array;
-	}
-
-	private static JsonArray writeBoxShops() {
-		JsonArray array = new JsonArray();
-		for (BoxShopPoint boxShop : BOX_SHOPS.values()) {
-			JsonObject obj = new JsonObject();
-			obj.addProperty("id", boxShop.id().toString());
-			obj.addProperty("shopId", boxShop.shopId().toString());
-			obj.addProperty("ownerId", boxShop.ownerId().toString());
-			obj.addProperty("ownerName", boxShop.ownerName());
-			obj.addProperty("name", boxShop.name());
-			obj.addProperty("dimensionId", boxShop.dimensionId().toString());
-			obj.addProperty("x", boxShop.x());
-			obj.addProperty("y", boxShop.y());
-			obj.addProperty("z", boxShop.z());
-			obj.addProperty("named", boxShop.named());
-			array.add(obj);
-		}
-		return array;
-	}
-
-	private static JsonArray writeShopLimits() {
-		JsonArray array = new JsonArray();
-		for (Map.Entry<UUID, Integer> entry : PLAYER_SHOP_LIMITS.entrySet()) {
-			JsonObject obj = new JsonObject();
-			obj.addProperty("owner", entry.getKey().toString());
-			obj.addProperty("limit", Math.max(DEFAULT_SHOP_LIMIT, entry.getValue()));
-			array.add(obj);
-		}
-		return array;
-	}
-
-	private static JsonArray writeRewardedEquipment() {
-		JsonArray array = new JsonArray();
-		for (Map.Entry<UUID, Set<String>> entry : PLAYER_REWARDED_EQUIPMENT.entrySet()) {
-			for (String itemId : entry.getValue()) {
-				if (itemId == null || itemId.isBlank()) {
-					continue;
-				}
-				JsonObject obj = new JsonObject();
-				obj.addProperty("owner", entry.getKey().toString());
-				obj.addProperty("itemId", itemId);
-				array.add(obj);
-			}
-		}
-		return array;
-	}
-
-	private static JsonArray writeMoments() {
-		List<MomentPoint> moments = new ArrayList<>(MOMENTS.values());
-		moments.sort(Comparator.comparingLong(MomentPoint::createdAt).reversed());
-
-		JsonArray array = new JsonArray();
-		for (MomentPoint moment : moments) {
-			JsonObject obj = new JsonObject();
-			obj.addProperty("id", moment.id().toString());
-			obj.addProperty("authorId", moment.authorId().toString());
-			obj.addProperty("authorName", moment.authorName());
-			obj.addProperty("content", moment.content());
-			obj.addProperty("createdAt", moment.createdAt());
-
-			JsonArray likedBy = new JsonArray();
-			for (UUID playerId : moment.likedBy()) {
-				likedBy.add(playerId.toString());
-			}
-			obj.add("likedBy", likedBy);
-
-			array.add(obj);
-		}
-		return array;
-	}
-
-	private static JsonArray writeMomentDrafts() {
-		JsonArray array = new JsonArray();
-		for (Map.Entry<UUID, String> entry : MOMENT_DRAFTS.entrySet()) {
-			JsonObject obj = new JsonObject();
-			obj.addProperty("playerId", entry.getKey().toString());
-			obj.addProperty("content", entry.getValue());
-			array.add(obj);
-		}
-		return array;
-	}
-
-	private static void readDisabledItems(JsonObject root) {
-		if (!root.has("disabledItems") || !root.get("disabledItems").isJsonArray()) {
+	private static void closeStorageQuietly() {
+		ServerDataStore store = STORAGE;
+		STORAGE = null;
+		if (store == null) {
 			return;
 		}
 
-		for (JsonElement element : root.getAsJsonArray("disabledItems")) {
-			if (element.isJsonPrimitive()) {
-				String itemId = element.getAsString();
-				if (!itemId.isBlank()) {
-					DISABLED_ITEM_IDS.add(itemId);
-				}
-			}
-		}
-	}
-
-	private static void readHomes(JsonObject root) {
-		if (!root.has("homes") || !root.get("homes").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("homes")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID owner = UUID.fromString(obj.get("owner").getAsString());
-				HomePoint home = new HomePoint(
-					UUID.fromString(obj.get("id").getAsString()),
-					obj.get("name").getAsString(),
-					obj.get("x").getAsInt(),
-					obj.get("y").getAsInt(),
-					obj.get("z").getAsInt(),
-					obj.has("iconItemId") ? obj.get("iconItemId").getAsString() : "minecraft:compass"
-				);
-				PLAYER_HOMES.computeIfAbsent(owner, key -> new ArrayList<>()).add(home);
-			} catch (Exception ignored) {
-				// Skip invalid entry
-			}
-		}
-	}
-
-	private static void readTerritories(JsonObject root) {
-		if (!root.has("territories") || !root.get("territories").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("territories")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID owner = UUID.fromString(obj.get("owner").getAsString());
-				TerritoryPoint territory = new TerritoryPoint(
-					UUID.fromString(obj.get("id").getAsString()),
-					owner,
-					obj.has("ownerName") ? obj.get("ownerName").getAsString() : "",
-					obj.get("name").getAsString(),
-					ResourceLocation.parse(obj.get("dimensionId").getAsString()),
-					obj.get("minX").getAsInt(),
-					obj.get("minY").getAsInt(),
-					obj.get("minZ").getAsInt(),
-					obj.get("maxX").getAsInt(),
-					obj.get("maxY").getAsInt(),
-					obj.get("maxZ").getAsInt(),
-					obj.has("iconItemId") ? obj.get("iconItemId").getAsString() : "minecraft:grass_block",
-					!obj.has("buildBreakAllowed") || obj.get("buildBreakAllowed").getAsBoolean(),
-					!obj.has("containerAllowed") || obj.get("containerAllowed").getAsBoolean(),
-					!obj.has("interactAllowed") || obj.get("interactAllowed").getAsBoolean(),
-					!obj.has("damageEntitiesAllowed") || obj.get("damageEntitiesAllowed").getAsBoolean(),
-					!obj.has("blockUseAllowed") || obj.get("blockUseAllowed").getAsBoolean(),
-					readWhitelist(obj)
-				);
-				PLAYER_TERRITORIES.computeIfAbsent(owner, key -> new ArrayList<>()).add(territory);
-			} catch (Exception ignored) {
-				// Skip invalid entry
-			}
-		}
-	}
-
-	private static Set<UUID> readWhitelist(JsonObject obj) {
-		Set<UUID> whitelist = ConcurrentHashMap.newKeySet();
-		if (!obj.has("whitelist") || !obj.get("whitelist").isJsonArray()) {
-			return whitelist;
-		}
-
-		for (JsonElement entry : obj.getAsJsonArray("whitelist")) {
-			if (!entry.isJsonPrimitive()) {
-				continue;
-			}
-			try {
-				whitelist.add(UUID.fromString(entry.getAsString()));
-			} catch (IllegalArgumentException ignored) {
-				// ignore invalid uuid
-			}
-		}
-		return whitelist;
-	}
-
-	private static void readShops(JsonObject root) {
-		if (!root.has("shops") || !root.get("shops").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("shops")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID owner = UUID.fromString(obj.get("owner").getAsString());
-				UUID id = UUID.fromString(obj.get("id").getAsString());
-				String name = obj.get("name").getAsString();
-				String ownerName = obj.has("ownerName") ? obj.get("ownerName").getAsString() : "";
-				String icon = obj.has("iconItemId") ? obj.get("iconItemId").getAsString() : "minecraft:chest";
-				List<ShopGood> goods = new ArrayList<>();
-				if (obj.has("goods") && obj.get("goods").isJsonArray()) {
-					for (JsonElement goodElement : obj.getAsJsonArray("goods")) {
-						if (!goodElement.isJsonObject()) {
-							continue;
-						}
-						JsonObject goodObj = goodElement.getAsJsonObject();
-						goods.add(new ShopGood(
-							goodObj.get("itemId").getAsString(),
-							goodObj.has("name") ? goodObj.get("name").getAsString() : "",
-							goodObj.has("iconItemId") ? goodObj.get("iconItemId").getAsString() : goodObj.get("itemId").getAsString(),
-							Math.max(0, goodObj.has("stock") ? goodObj.get("stock").getAsInt() : 0),
-							Math.max(0D, goodObj.has("price") ? goodObj.get("price").getAsDouble() : 0D)
-						));
-					}
-				}
-				PLAYER_SHOPS.computeIfAbsent(owner, key -> new ArrayList<>()).add(new ShopPoint(id, owner, ownerName, name, icon, goods));
-			} catch (Exception ignored) {
-				// skip invalid
-			}
-		}
-	}
-
-	private static void readShopLimits(JsonObject root) {
-		if (!root.has("shopLimits") || !root.get("shopLimits").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("shopLimits")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID owner = UUID.fromString(obj.get("owner").getAsString());
-				int limit = Math.max(DEFAULT_SHOP_LIMIT, obj.get("limit").getAsInt());
-				PLAYER_SHOP_LIMITS.put(owner, limit);
-			} catch (Exception ignored) {
-				// skip invalid
-			}
-		}
-	}
-
-	private static void readRewardedEquipment(JsonObject root) {
-		if (!root.has("rewardedEquipment") || !root.get("rewardedEquipment").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("rewardedEquipment")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID owner = UUID.fromString(obj.get("owner").getAsString());
-				String itemId = obj.get("itemId").getAsString();
-				if (itemId == null || itemId.isBlank()) {
-					continue;
-				}
-				PLAYER_REWARDED_EQUIPMENT.computeIfAbsent(owner, key -> ConcurrentHashMap.newKeySet()).add(itemId);
-			} catch (Exception ignored) {
-				// Skip invalid entry
-			}
-		}
-	}
-
-	private static void readMoments(JsonObject root) {
-		if (!root.has("moments") || !root.get("moments").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("moments")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID id = UUID.fromString(obj.get("id").getAsString());
-				UUID authorId = UUID.fromString(obj.get("authorId").getAsString());
-				String authorName = obj.has("authorName") ? obj.get("authorName").getAsString() : "";
-				String content = obj.has("content") ? obj.get("content").getAsString() : "";
-				long createdAt = obj.has("createdAt") ? obj.get("createdAt").getAsLong() : 0L;
-				if (content.isBlank()) {
-					continue;
-				}
-
-				MomentPoint moment = new MomentPoint(id, authorId, authorName, truncateMomentContent(content), createdAt);
-				readMomentPlayerIds(obj, "likedBy", moment.likedBy());
-				MOMENTS.put(id, moment);
-			} catch (Exception ignored) {
-				// skip invalid moment
-			}
-		}
-	}
-
-	private static void readMomentPlayerIds(JsonObject obj, String key, Set<UUID> target) {
-		if (!obj.has(key) || !obj.get(key).isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : obj.getAsJsonArray(key)) {
-			if (!element.isJsonPrimitive()) {
-				continue;
-			}
-			try {
-				target.add(UUID.fromString(element.getAsString()));
-			} catch (IllegalArgumentException ignored) {
-				// skip invalid uuid
-			}
-		}
-	}
-
-	private static void readMomentDrafts(JsonObject root) {
-		if (!root.has("momentDrafts") || !root.get("momentDrafts").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("momentDrafts")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			JsonObject obj = element.getAsJsonObject();
-			try {
-				UUID playerId = UUID.fromString(obj.get("playerId").getAsString());
-				String content = obj.has("content") ? obj.get("content").getAsString() : "";
-				if (!content.isBlank()) {
-					MOMENT_DRAFTS.put(playerId, truncateMomentContent(content));
-				}
-			} catch (Exception ignored) {
-				// skip invalid draft
-			}
-		}
-	}
-
-	private static void readEconomySidebarHidden(JsonObject root) {
-		if (!root.has("economySidebarHiddenPlayerIds") || !root.get("economySidebarHiddenPlayerIds").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("economySidebarHiddenPlayerIds")) {
-			if (!element.isJsonPrimitive()) {
-				continue;
-			}
-			try {
-				ECONOMY_SIDEBAR_HIDDEN.add(UUID.fromString(element.getAsString()));
-			} catch (Exception ignored) {
-				// Skip invalid player IDs.
-			}
+		try {
+			store.close();
+		} catch (SQLException error) {
+			LOGGER.warn("Failed to close teleport menu database", error);
 		}
 	}
 
@@ -2070,64 +1660,6 @@ public class TeleportMenuMod implements ModInitializer {
 		// Disabled: keep UI localization bundled client-side to avoid protocol mismatch on join.
 	}
 
-	private static void readBoxShops(JsonObject root) {
-		if (!root.has("boxShops") || !root.get("boxShops").isJsonArray()) {
-			return;
-		}
-
-		for (JsonElement element : root.getAsJsonArray("boxShops")) {
-			if (!element.isJsonObject()) {
-				continue;
-			}
-
-			try {
-				JsonObject obj = element.getAsJsonObject();
-				UUID id = UUID.fromString(obj.get("id").getAsString());
-				UUID shopId = UUID.fromString(obj.get("shopId").getAsString());
-				BOX_SHOP_SHOP_IDS.add(shopId);
-				UUID ownerId = UUID.fromString(obj.get("ownerId").getAsString());
-				String ownerName = obj.has("ownerName") ? obj.get("ownerName").getAsString() : "";
-				String name = obj.has("name") ? obj.get("name").getAsString() : DEFAULT_BOX_SHOP_NAME;
-				boolean named = !obj.has("named") || obj.get("named").getAsBoolean();
-				ResourceLocation dimensionId;
-				BlockPos boxPos;
-
-				if (obj.has("dimensionId") && obj.has("x") && obj.has("y") && obj.has("z")) {
-					dimensionId = ResourceLocation.parse(obj.get("dimensionId").getAsString());
-					boxPos = new BlockPos(obj.get("x").getAsInt(), obj.get("y").getAsInt(), obj.get("z").getAsInt());
-				} else if (obj.has("entityId") && ACTIVE_SERVER != null) {
-					UUID legacyEntityId = UUID.fromString(obj.get("entityId").getAsString());
-					net.minecraft.world.entity.Entity legacyEntity = findEntityByUuid(ACTIVE_SERVER, legacyEntityId);
-					if (legacyEntity == null) {
-						continue;
-					}
-					dimensionId = legacyEntity.level().dimension().location();
-					boxPos = legacyEntity.blockPosition();
-					legacyEntity.discard();
-				} else {
-					continue;
-				}
-
-				BoxShopPoint point = new BoxShopPoint(
-					id,
-					shopId,
-					ownerId,
-					ownerName,
-					name,
-					dimensionId,
-					boxPos.getX(),
-					boxPos.getY(),
-					boxPos.getZ(),
-					named
-				);
-				BOX_SHOPS.put(id, point);
-				ensureBoxShopBlock(ACTIVE_SERVER, point);
-				refreshBoxShopHologram(ACTIVE_SERVER, point);
-			} catch (Exception ignored) {
-			}
-		}
-	}
-
 	private static double economyGetMoney(String playerName) throws InvocationTargetException, IllegalAccessException {
 		return (double) ECONOMY_GET_MONEY.invoke(null, playerName);
 	}
@@ -3273,34 +2805,11 @@ public class TeleportMenuMod implements ModInitializer {
 	}
 
 	private static String sanitizeMomentContent(String rawContent) {
-		if (rawContent == null) {
-			return "";
-		}
-
-		String normalized = rawContent
-			.replace("\r\n", "\n")
-			.replace('\r', '\n')
-			.replace("\t", "    ");
-
-		StringBuilder builder = new StringBuilder(Math.min(normalized.length(), MOMENT_MAX_CONTENT_LENGTH));
-		for (int i = 0; i < normalized.length() && builder.length() < MOMENT_MAX_CONTENT_LENGTH; i++) {
-			char current = normalized.charAt(i);
-			if (current == '\n' || current >= 0x20) {
-				builder.append(current);
-			}
-		}
-
-		return builder.toString().strip();
+		return MomentContent.sanitize(rawContent);
 	}
 
 	private static String truncateMomentContent(String content) {
-		if (content == null) {
-			return "";
-		}
-
-		return content.length() > MOMENT_MAX_CONTENT_LENGTH
-			? content.substring(0, MOMENT_MAX_CONTENT_LENGTH)
-			: content;
+		return MomentContent.truncate(content);
 	}
 
 	private static int countItemInInventory(Inventory inventory, Item item) {
@@ -3428,272 +2937,11 @@ public class TeleportMenuMod implements ModInitializer {
 		source.sendSuccess(() -> coloredTranslatable(ChatFormatting.YELLOW, key, args), false);
 	}
 
-	private record HomePoint(UUID id, String name, int x, int y, int z, String iconItemId) {
-	}
-
-	private static final class MomentPoint {
-		private final UUID id;
-		private final UUID authorId;
-		private final String authorName;
-		private final String content;
-		private final long createdAt;
-		private final Set<UUID> likedBy = ConcurrentHashMap.newKeySet();
-
-		private MomentPoint(UUID id, UUID authorId, String authorName, String content, long createdAt) {
-			this.id = id;
-			this.authorId = authorId;
-			this.authorName = authorName == null ? "" : authorName;
-			this.content = content == null ? "" : content;
-			this.createdAt = createdAt;
-		}
-
-		private UUID id() { return this.id; }
-		private UUID authorId() { return this.authorId; }
-		private String authorName() { return this.authorName; }
-		private String content() { return this.content; }
-		private long createdAt() { return this.createdAt; }
-		private Set<UUID> likedBy() { return this.likedBy; }
-
-		private boolean toggleLike(UUID playerId) {
-			if (this.likedBy.contains(playerId)) {
-				this.likedBy.remove(playerId);
-				return false;
-			}
-
-			this.likedBy.add(playerId);
-			return true;
-		}
-	}
-
 	private record TerritorySelection(ResourceLocation dimensionId, BlockPos pointA, BlockPos pointB) {
 	}
 
 	private record TerritoryHudState(UUID territoryId, long clearAtTick) {
 	}
 
-	private static final class ShopPoint {
-		private final UUID id;
-		private final UUID ownerId;
-		private final String ownerName;
-		private String name;
-		private String iconItemId;
-		private final List<ShopGood> goods;
 
-		private ShopPoint(UUID id, UUID ownerId, String ownerName, String name, String iconItemId, List<ShopGood> goods) {
-			this.id = id;
-			this.ownerId = ownerId;
-			this.ownerName = ownerName == null ? "" : ownerName;
-			this.name = name == null ? "" : name;
-			this.iconItemId = iconItemId == null ? "minecraft:chest" : iconItemId;
-			this.goods = goods == null ? new ArrayList<>() : goods;
-		}
-
-		private UUID id() { return this.id; }
-		private UUID ownerId() { return this.ownerId; }
-		private String ownerName() { return this.ownerName; }
-		private String name() { return this.name; }
-		private String iconItemId() { return this.iconItemId; }
-		private List<ShopGood> goods() { return this.goods; }
-		private void setName(String name) { this.name = name == null ? "" : name; }
-		private void setIconItemId(String iconItemId) { this.iconItemId = iconItemId == null ? "minecraft:chest" : iconItemId; }
-
-		private ShopGood findGood(String itemId) {
-			if (itemId == null) {
-				return null;
-			}
-			for (ShopGood good : this.goods) {
-				if (itemId.equals(good.itemId())) {
-					return good;
-				}
-			}
-			return null;
-		}
-	}
-
-	private static final class ShopGood {
-		private final String itemId;
-		private final String name;
-		private final String iconItemId;
-		private int stock;
-		private double price;
-
-		private ShopGood(String itemId, String name, String iconItemId, int stock, double price) {
-			this.itemId = itemId == null ? "" : itemId;
-			this.name = name == null ? "" : name;
-			this.iconItemId = iconItemId == null ? this.itemId : iconItemId;
-			this.stock = Math.max(0, stock);
-			this.price = Math.max(0D, price);
-		}
-
-		private String itemId() { return this.itemId; }
-		private String name() { return this.name; }
-		private String iconItemId() { return this.iconItemId; }
-		private int stock() { return this.stock; }
-		private double price() { return this.price; }
-		private void setStock(int stock) { this.stock = Math.max(0, stock); }
-		private void setPrice(double price) { this.price = Math.max(0D, price); }
-	}
-
-	private record BoxShopPoint(
-		UUID id,
-		UUID shopId,
-		UUID ownerId,
-		String ownerName,
-		String name,
-		ResourceLocation dimensionId,
-		int x,
-		int y,
-		int z,
-		boolean named
-	) {
-		private BoxShopPoint {
-			ownerName = ownerName == null ? "" : ownerName;
-			name = sanitizeBoxShopName(name);
-		}
-
-		private BoxShopPoint withName(String nextName, boolean nextNamed) {
-			return new BoxShopPoint(
-				this.id,
-				this.shopId,
-				this.ownerId,
-				this.ownerName,
-				nextName,
-				this.dimensionId,
-				this.x,
-				this.y,
-				this.z,
-				nextNamed
-			);
-		}
-
-		private BlockPos blockPos() {
-			return new BlockPos(this.x, this.y, this.z);
-		}
-	}
-
-	private static final class TerritoryPoint {
-		private final UUID id;
-		private final UUID ownerId;
-		private final String ownerName;
-		private final String name;
-		private final ResourceLocation dimensionId;
-		private final int minX;
-		private final int minY;
-		private final int minZ;
-		private final int maxX;
-		private final int maxY;
-		private final int maxZ;
-		private final String iconItemId;
-		private final Set<UUID> whitelistPlayerIds;
-		private boolean buildBreakAllowed;
-		private boolean containerAllowed;
-		private boolean interactAllowed;
-		private boolean damageEntitiesAllowed;
-		private boolean blockUseAllowed;
-
-		private TerritoryPoint(
-			UUID id,
-			UUID ownerId,
-			String ownerName,
-			String name,
-			ResourceLocation dimensionId,
-			int minX,
-			int minY,
-			int minZ,
-			int maxX,
-			int maxY,
-			int maxZ,
-			String iconItemId,
-			boolean buildBreakAllowed,
-			boolean containerAllowed,
-			boolean interactAllowed,
-			boolean damageEntitiesAllowed,
-			boolean blockUseAllowed,
-			Set<UUID> whitelistPlayerIds
-		) {
-			this.id = id;
-			this.ownerId = ownerId;
-			this.ownerName = ownerName == null ? "" : ownerName;
-			this.name = name == null ? "" : name;
-			this.dimensionId = dimensionId;
-			this.minX = minX;
-			this.minY = minY;
-			this.minZ = minZ;
-			this.maxX = maxX;
-			this.maxY = maxY;
-			this.maxZ = maxZ;
-			this.iconItemId = iconItemId == null ? "minecraft:grass_block" : iconItemId;
-			this.buildBreakAllowed = buildBreakAllowed;
-			this.containerAllowed = containerAllowed;
-			this.interactAllowed = interactAllowed;
-			this.damageEntitiesAllowed = damageEntitiesAllowed;
-			this.blockUseAllowed = blockUseAllowed;
-			this.whitelistPlayerIds = whitelistPlayerIds == null ? ConcurrentHashMap.newKeySet() : whitelistPlayerIds;
-		}
-
-		private UUID id() { return this.id; }
-		private UUID ownerId() { return this.ownerId; }
-		private String ownerName() { return this.ownerName; }
-		private String name() { return this.name; }
-		private ResourceLocation dimensionId() { return this.dimensionId; }
-		private int minX() { return this.minX; }
-		private int minY() { return this.minY; }
-		private int minZ() { return this.minZ; }
-		private int maxX() { return this.maxX; }
-		private int maxY() { return this.maxY; }
-		private int maxZ() { return this.maxZ; }
-		private String iconItemId() { return this.iconItemId; }
-		private boolean buildBreakAllowed() { return this.buildBreakAllowed; }
-		private boolean containerAllowed() { return this.containerAllowed; }
-		private boolean interactAllowed() { return this.interactAllowed; }
-		private boolean damageEntitiesAllowed() { return this.damageEntitiesAllowed; }
-		private boolean blockUseAllowed() { return this.blockUseAllowed; }
-		private Set<UUID> whitelistPlayerIds() { return this.whitelistPlayerIds; }
-
-		private void setBuildBreakAllowed(boolean value) { this.buildBreakAllowed = value; }
-		private void setContainerAllowed(boolean value) { this.containerAllowed = value; }
-		private void setInteractAllowed(boolean value) { this.interactAllowed = value; }
-		private void setDamageEntitiesAllowed(boolean value) { this.damageEntitiesAllowed = value; }
-		private void setBlockUseAllowed(boolean value) { this.blockUseAllowed = value; }
-
-		private boolean contains(int x, int y, int z) {
-			return x >= this.minX && x <= this.maxX && y >= this.minY && y <= this.maxY && z >= this.minZ && z <= this.maxZ;
-		}
-	}
-
-	private enum TerritoryPermission {
-		BUILD_BREAK("build_break", "screen.teleportmenu.territories.permission.build_break"),
-		CONTAINER("container", "screen.teleportmenu.territories.permission.container"),
-		INTERACT("interact", "screen.teleportmenu.territories.permission.interact"),
-		DAMAGE_ENTITIES("damage_entities", "screen.teleportmenu.territories.permission.damage_entities"),
-		BLOCK_USE("block_use", "screen.teleportmenu.territories.permission.block_use");
-
-		private final String key;
-		private final String translationKey;
-
-		TerritoryPermission(String key, String translationKey) {
-			this.key = key;
-			this.translationKey = translationKey;
-		}
-
-		private String key() {
-			return this.key;
-		}
-
-		private String translationKey() {
-			return this.translationKey;
-		}
-
-		private static TerritoryPermission fromKey(String key) {
-			if (key == null) {
-				return null;
-			}
-			for (TerritoryPermission permission : values()) {
-				if (permission.key.equalsIgnoreCase(key.trim())) {
-					return permission;
-				}
-			}
-			return null;
-		}
-	}
 }
