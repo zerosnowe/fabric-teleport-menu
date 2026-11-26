@@ -23,9 +23,11 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.example.server.ServerMessages.sendActionBar;
 import static com.example.server.ServerMessages.sendError;
 import static com.example.server.ServerMessages.sendSuccess;
 import static com.example.server.ServerMessages.sendWarn;
+import static com.example.server.ServerMessages.translate;
 import static com.example.server.ServerState.LAST_DENY_ACTIONBAR_TICK;
 import static com.example.server.ServerState.PLAYER_TERRITORIES;
 import static com.example.server.ServerState.SERVER_TICK;
@@ -218,8 +220,8 @@ public final class TerritoryService {
 		sendSuccess(
 			source,
 			"message.teleportmenu.territory_permission_updated",
-			Component.translatable(permission.translationKey()),
-			allowed ? Component.translatable("screen.teleportmenu.territories.allow") : Component.translatable("screen.teleportmenu.territories.deny")
+			translate(source, permission.translationKey()),
+			translate(source, allowed ? "screen.teleportmenu.territories.allow" : "screen.teleportmenu.territories.deny")
 		);
 	}
 
@@ -330,9 +332,9 @@ public final class TerritoryService {
 
 		if (state == null || !inTerritory.id().equals(state.territoryId())) {
 			if (inTerritory.ownerId().equals(player.getUUID())) {
-				player.displayClientMessage(Component.translatable("message.teleportmenu.territory_owner_welcome", inTerritory.name(), player.getName().getString()), true);
+				player.displayClientMessage(Component.literal(translate(player, "message.teleportmenu.territory_owner_welcome", inTerritory.name(), player.getName().getString())), true);
 			} else {
-				player.displayClientMessage(Component.translatable("message.teleportmenu.territory_entered", inTerritory.ownerName()), true);
+				player.displayClientMessage(Component.literal(translate(player, "message.teleportmenu.territory_entered", inTerritory.ownerName())), true);
 			}
 			TERRITORY_HUD_STATES.put(playerId, new TerritoryHudState(inTerritory.id(), SERVER_TICK + 40L));
 			return;
@@ -443,7 +445,7 @@ public final class TerritoryService {
 			return;
 		}
 		LAST_DENY_ACTIONBAR_TICK.put(player.getUUID(), SERVER_TICK);
-		player.displayClientMessage(Component.translatable("message.teleportmenu.no_permission_action").withStyle(ChatFormatting.RED), true);
+		sendActionBar(player, ChatFormatting.RED, "message.teleportmenu.no_permission_action");
 	}
 
 	private static TerritoryPoint findOwnedTerritory(ServerPlayer owner, UUID territoryId) {
